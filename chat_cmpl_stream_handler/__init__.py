@@ -91,7 +91,14 @@ async def stream_until_user_input(
                 **(
                     {
                         "tool_calls": [
-                            ChatCompletionMessageFunctionToolCallParam(...)
+                            ChatCompletionMessageFunctionToolCallParam(
+                                id=tc.id,
+                                type="function",
+                                function={
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments or "{}",
+                                },
+                            )
                             for tc in assistant_msg.tool_calls
                         ]
                     }
