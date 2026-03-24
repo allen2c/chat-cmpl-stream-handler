@@ -4,6 +4,10 @@ from dataclasses import dataclass
 import pytest
 from openai import AsyncOpenAI
 
+from chat_cmpl_stream_handler._patch_stream_tool_call_index import apply
+
+apply()
+
 
 @dataclass(frozen=True)
 class ProviderConfig:
