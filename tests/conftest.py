@@ -32,7 +32,7 @@ PROVIDER_CONFIGS: dict[str, ProviderConfig] = {
     "moonshot": ProviderConfig(
         env_var="MOONSHOT_API_KEY",
         base_url="https://api.moonshot.ai/v1",
-        default_model="kimi-k2.5",
+        default_model="moonshot-v1-8k",
     ),
     "deepseek": ProviderConfig(
         env_var="DEEPSEEK_API_KEY",

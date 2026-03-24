@@ -2,7 +2,6 @@ import json
 from typing import Any
 
 import pytest
-from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionToolParam
 
 from chat_cmpl_stream_handler import (
@@ -10,6 +9,7 @@ from chat_cmpl_stream_handler import (
     StreamResult,
     stream_until_user_input,
 )
+from tests.conftest import LLMProvider
 
 GET_WEATHER_TOOL: ChatCompletionToolParam = {
     "type": "function",
@@ -36,14 +36,15 @@ async def get_weather_invoker(arguments: str, context: Any) -> str:
 
 
 @pytest.mark.asyncio
-async def test_stream_until_user_input_with_tool_call(
-    openai_client: AsyncOpenAI, openai_model: str
-):
+async def test_stream_until_user_input_with_tool_call(llm_provider: LLMProvider):
+    openai_client = llm_provider.client
+    model = llm_provider.model
+
     messages = [{"role": "user", "content": "What's the weather in Tokyo?"}]
 
     result = await stream_until_user_input(
         messages=messages,
-        model=openai_model,
+        model=model,
         openai_client=openai_client,
         stream_handler=ChatCompletionStreamHandler(),
         tool_invokers={"get_weather": get_weather_invoker},
