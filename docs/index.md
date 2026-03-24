@@ -5,14 +5,18 @@
 [![License](https://img.shields.io/pypi/l/chat-cmpl-stream-handler.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://github.com/allen2c/chat-cmpl-stream-handler/actions/workflows/test.yml/badge.svg)](https://github.com/allen2c/chat-cmpl-stream-handler/actions/workflows/test.yml)
 
-A lightweight Python library for handling OpenAI-compatible chat completion streams with automatic tool call execution.
+You've reimplemented the tool call loop for the fifth time. So have I. Never again.
 
-## Features
+## Why
 
-- **Automatic tool call loop** — `stream_until_user_input` keeps streaming and executing tool calls until the model has no more tool calls to make
-- **Event hooks** — subclass `ChatCompletionStreamHandler` to react to any stream event (content delta, tool call arguments, refusals, logprobs, etc.)
-- **Usage tracking** — aggregates `CompletionUsage` across all iterations in the loop
-- **Provider agnostic** — works with any OpenAI-compatible endpoint (OpenAI, Groq, Mistral, Gemini, DeepSeek, Moonshot, HuggingFace, etc.)
+OpenAI Responses API? Deprecated vibes. Agents SDK? Lovely — until the third breaking change in a month. Chat Completions API? Still here. Still boring. Still working.
+
+This library does exactly two things that everyone keeps copy-pasting across projects:
+
+1. Stream a chat completion and handle events
+2. Keep looping tool calls until the model is done
+
+That's it. No magic. No framework. Just the loop.
 
 ## Installation
 
@@ -22,16 +26,11 @@ pip install chat-cmpl-stream-handler
 
 ## Quick Start
 
-### Basic streaming with tool calls
-
 ```python
 import asyncio
 import json
 from openai import AsyncOpenAI
-from chat_cmpl_stream_handler import (
-    ChatCompletionStreamHandler,
-    stream_until_user_input,
-)
+from chat_cmpl_stream_handler import ChatCompletionStreamHandler, stream_until_user_input
 
 client = AsyncOpenAI(api_key="...")
 
@@ -42,9 +41,7 @@ GET_WEATHER_TOOL = {
         "description": "Get the current weather for a given city.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "city": {"type": "string"},
-            },
+            "properties": {"city": {"type": "string"}},
             "required": ["city"],
             "additionalProperties": False,
         },
@@ -59,10 +56,8 @@ async def get_weather(arguments: str, context) -> str:
 
 
 async def main():
-    messages = [{"role": "user", "content": "What's the weather in Tokyo?"}]
-
     result = await stream_until_user_input(
-        messages=messages,
+        messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
         model="gpt-4.1-nano",
         openai_client=client,
         stream_handler=ChatCompletionStreamHandler(),
@@ -73,21 +68,20 @@ async def main():
         },
     )
 
-    # Full message history including tool calls
+    # user → assistant (tool_calls) → tool → assistant (final answer)
     for msg in result.to_input_list():
         print(msg["role"], "->", msg.get("content", ""))
 
-    # Token usage across all iterations
     for usage in result.usages:
-        print(f"tokens: {usage.total_tokens}")
+        print(f"total tokens: {usage.total_tokens}")
 
 
 asyncio.run(main())
 ```
 
-### Custom event handler
+### Listening to stream events
 
-Subclass `ChatCompletionStreamHandler` and override any hook you need:
+Subclass `ChatCompletionStreamHandler` and override whatever you care about:
 
 ```python
 from chat_cmpl_stream_handler import ChatCompletionStreamHandler
@@ -97,14 +91,14 @@ from openai.lib.streaming.chat._events import (
 )
 
 
-class MyHandler(ChatCompletionStreamHandler):
+class PrintingHandler(ChatCompletionStreamHandler):
     async def on_content_delta(self, event: ContentDeltaEvent) -> None:
         print(event.delta, end="", flush=True)
 
     async def on_tool_calls_function_arguments_done(
         self, event: FunctionToolCallArgumentsDoneEvent
     ) -> None:
-        print(f"\n[tool call] {event.name}({event.arguments})")
+        print(f"\n[calling] {event.name}({event.arguments})")
 ```
 
 ## API Reference
@@ -125,59 +119,59 @@ async def stream_until_user_input(
 ) -> StreamResult
 ```
 
-Streams a chat completion, automatically executing any tool calls and feeding results back into the conversation. Returns once the model produces a response with no tool calls.
+Streams a completion, executes tool calls, feeds results back, repeats — until the model stops asking for tools. Raises `MaxIterationsReached` if you've somehow ended up in an infinite tool call loop (it happens).
 
-| Parameter        | Description                                                                              |
-|------------------|------------------------------------------------------------------------------------------|
-| `messages`       | Initial message list                                                                     |
-| `model`          | Model name                                                                               |
-| `openai_client`  | `AsyncOpenAI` instance                                                                   |
-| `stream_handler` | Handler that receives stream events                                                      |
-| `tool_invokers`  | Map of tool name → async callable `(arguments: str, context) -> str`                     |
-| `stream_kwargs`  | Extra kwargs passed to `beta.chat.completions.stream()` (e.g. `tools`, `stream_options`) |
-| `context`        | Arbitrary value forwarded to every tool invoker                                          |
-| `max_iterations` | Raises `MaxIterationsReached` if exceeded                                                |
+| Parameter        | Description                                                                             |
+|------------------|-----------------------------------------------------------------------------------------|
+| `messages`       | Initial message list                                                                    |
+| `model`          | Model name                                                                              |
+| `openai_client`  | `AsyncOpenAI` instance                                                                  |
+| `stream_handler` | Receives stream events                                                                  |
+| `tool_invokers`  | `{"tool_name": async_fn}` — each fn takes `(arguments: str, context)` and returns `str` |
+| `stream_kwargs`  | Passed directly to `beta.chat.completions.stream()` (e.g. `tools`, `stream_options`)    |
+| `context`        | Forwarded to every tool invoker as-is                                                   |
+| `max_iterations` | Safety cap. Default: 10                                                                 |
 
 ### `StreamResult`
 
-| Attribute / Method | Description                                                  |
-|--------------------|--------------------------------------------------------------|
-| `.to_input_list()` | Returns the full message history as a JSON-serializable list |
-| `.usages`          | `list[CompletionUsage]` — one entry per streaming iteration  |
+| Attribute / Method | Description                                                                 |
+|--------------------|-----------------------------------------------------------------------------|
+| `.to_input_list()` | Full message history as a JSON-serializable list, ready for the next round  |
+| `.usages`          | `list[CompletionUsage]` — one per iteration, so you can watch the bill grow |
 
 ### `ChatCompletionStreamHandler`
 
-Base class. Override any of the following async methods:
+All methods are no-ops by default. Override only what you need.
 
-| Method                                          | Trigger                                  |
-|-------------------------------------------------|------------------------------------------|
-| `on_event(event)`                               | Every event (before more specific hooks) |
-| `on_chunk(event)`                               | Every raw SSE chunk                      |
-| `on_content_delta(event)`                       | Each content token                       |
-| `on_content_done(event)`                        | Full content string complete             |
-| `on_refusal_delta(event)`                       | Each refusal token                       |
-| `on_refusal_done(event)`                        | Full refusal string complete             |
-| `on_tool_calls_function_arguments_delta(event)` | Each incremental tool argument fragment  |
-| `on_tool_calls_function_arguments_done(event)`  | Full tool argument JSON available        |
-| `on_logprobs_content_delta(event)`              | Each logprobs content token              |
-| `on_logprobs_content_done(event)`               | All logprobs content tokens complete     |
-| `on_logprobs_refusal_delta(event)`              | Each logprobs refusal token              |
-| `on_logprobs_refusal_done(event)`               | All logprobs refusal tokens complete     |
+| Method                                          | When it fires                           |
+|-------------------------------------------------|-----------------------------------------|
+| `on_event(event)`                               | Every event, before more specific hooks |
+| `on_chunk(event)`                               | Every raw SSE chunk                     |
+| `on_content_delta(event)`                       | Each content token                      |
+| `on_content_done(event)`                        | Full content string complete            |
+| `on_refusal_delta(event)`                       | Each refusal token                      |
+| `on_refusal_done(event)`                        | Full refusal string complete            |
+| `on_tool_calls_function_arguments_delta(event)` | Each incremental tool argument fragment |
+| `on_tool_calls_function_arguments_done(event)`  | Full tool argument JSON available       |
+| `on_logprobs_content_delta(event)`              | Each logprobs content token             |
+| `on_logprobs_content_done(event)`               | All logprobs content tokens done        |
+| `on_logprobs_refusal_delta(event)`              | Each logprobs refusal token             |
+| `on_logprobs_refusal_done(event)`               | All logprobs refusal tokens done        |
 
 ## Provider Compatibility
 
-This library works with any OpenAI-compatible endpoint. Some providers have known quirks:
+Works with any OpenAI-compatible endpoint. Some providers are more compatible than others.
 
-### Gemini (OpenAI-compatible endpoint)
+### Gemini
 
-Gemini's streaming API may return `tool_call_delta.index = None`, which causes the OpenAI SDK to crash. Apply the included opt-in patch before making any streaming requests:
+Gemini's streaming API sends `tool_call_delta.index = None`, which the OpenAI SDK does not appreciate. Apply the included patch once at startup:
 
 ```python
 from chat_cmpl_stream_handler._patch_stream_tool_call_index import apply
-apply()
+apply()  # safe to call multiple times
 ```
 
-Call `apply()` once at startup (e.g., at the top of your `main.py` or in your test `conftest.py`). It is safe to call multiple times.
+Put it at the top of `main.py`, or in `conftest.py` if you're testing. This is opt-in — the library won't silently monkey-patch anything on import.
 
 ## License
 
