@@ -10,7 +10,7 @@ You've reimplemented the tool call loop for the fifth time. So have I. Never aga
 
 ## Why
 
-OpenAI Responses API? Deprecated vibes. Agents SDK? Lovely — until the third breaking change in a month. Chat Completions API? Still here. Still boring. Still working.
+OpenAI Responses API? Still evolving. Agents SDK? Promising — frameworks always are, at first. Chat Completions API? Boring, stable, everywhere.
 
 This library does exactly two things that everyone keeps copy-pasting across projects:
 
