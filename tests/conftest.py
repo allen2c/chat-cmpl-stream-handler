@@ -59,6 +59,11 @@ PROVIDER_CONFIGS: dict[str, ProviderConfig] = {
         base_url="https://api.anthropic.com/v1",
         default_model="claude-haiku-4-5-20251001",
     ),
+    "xai": ProviderConfig(
+        env_var="XAI_API_KEY",
+        base_url="https://api.x.ai/v1",
+        default_model="grok-4-1-fast-non-reasoning",
+    ),
 }
 
 
