@@ -1,6 +1,20 @@
+import json
 import logging
-from typing import TYPE_CHECKING, Final, Generic, Text
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    Final,
+    Generic,
+    Iterable,
+    List,
+    Text,
+    Union,
+)
 
+from openai import AsyncOpenAI
 from openai.lib._parsing._completions import ResponseFormatT
 from openai.lib.streaming.chat._events import (
     ChunkEvent,
@@ -15,6 +29,17 @@ from openai.lib.streaming.chat._events import (
     RefusalDeltaEvent,
     RefusalDoneEvent,
 )
+from openai.types.chat import ChatCompletionMessageParam
+from openai.types.chat.chat_completion_assistant_message_param import (
+    ChatCompletionAssistantMessageParam,
+)
+from openai.types.chat.chat_completion_message_function_tool_call_param import (
+    ChatCompletionMessageFunctionToolCallParam,
+)
+from openai.types.chat.chat_completion_tool_message_param import (
+    ChatCompletionToolMessageParam,
+)
+from openai.types.shared.chat_model import ChatModel
 
 if TYPE_CHECKING:
     from openai.lib.streaming.chat._events import ChatCompletionStreamEvent
@@ -23,6 +48,94 @@ __version__: Final[Text] = "0.1.0"
 
 
 logger = logging.getLogger(__name__)
+
+
+ToolInvokerFn = Callable[[str, Any], Awaitable[str]]
+
+
+async def stream_until_user_input(
+    messages: Iterable[ChatCompletionMessageParam],
+    model: Union[str, ChatModel],
+    openai_client: AsyncOpenAI,
+    *,
+    stream_handler: "ChatCompletionStreamHandler[ResponseFormatT]",
+    tool_invokers: Dict[str, ToolInvokerFn] | None = None,
+    stream_kwargs: Dict[Text, Any] | None = None,
+    context: Any | None = None,
+    max_iterations: int = 10,
+    **kwargs,
+) -> "StreamResult":
+    current_messages = list(messages)
+
+    for _ in range(max_iterations):
+        # 1. stream the response
+        async with openai_client.beta.chat.completions.stream(
+            messages=current_messages,
+            model=model,
+            **{
+                k: v
+                for k, v in (stream_kwargs or {}).items()
+                if k not in ("messages", "model")
+            },
+        ) as stream:
+            async for event in stream:
+                await stream_handler.handle(event)
+
+            final = await stream.get_final_completion()
+
+        assistant_msg = final.choices[0].message
+        current_messages.append(
+            ChatCompletionAssistantMessageParam(
+                role="assistant",
+                content=assistant_msg.content,
+                **(
+                    {
+                        "tool_calls": [
+                            ChatCompletionMessageFunctionToolCallParam(...)
+                            for tc in assistant_msg.tool_calls
+                        ]
+                    }
+                    if assistant_msg.tool_calls
+                    else {}
+                ),
+            )
+        )  # Add assistant message to history
+
+        # 2. Check if there are tool calls
+        if not assistant_msg.tool_calls:
+            return StreamResult(current_messages, model)  # End
+
+        # 3. Execute tool calls, and add the results back to messages
+        for tool_call in assistant_msg.tool_calls:
+            invoker = (tool_invokers or {}).get(tool_call.function.name)
+
+            if invoker is None:
+                raise ValueError(f"No invoker for tool: {tool_call.function.name}")
+
+            tool_call_output = await invoker(tool_call.function.arguments, context)
+
+            current_messages.append(
+                ChatCompletionToolMessageParam(
+                    role="tool",
+                    tool_call_id=tool_call.id,
+                    content=tool_call_output,
+                )
+            )
+
+    raise MaxIterationsReached(
+        f"Reached max_iterations={max_iterations} without waiting for user input."
+    )
+
+
+class StreamResult:
+    def __init__(
+        self, messages: List[ChatCompletionMessageParam], model: Union[str, ChatModel]
+    ):
+        self._messages = messages
+        self._model = model
+
+    def to_input_list(self) -> List[ChatCompletionMessageParam]:
+        return json.loads(json.dumps(self._messages, default=str))
 
 
 class ChatCompletionStreamHandler(Generic[ResponseFormatT]):
@@ -108,3 +221,9 @@ class ChatCompletionStreamHandler(Generic[ResponseFormatT]):
     async def on_logprobs_refusal_done(self, event: LogprobsRefusalDoneEvent) -> None:
         """Called once with the complete list of refusal log-probability tokens."""
         pass
+
+
+class MaxIterationsReached(Exception):
+    """Raised when stream_until_user_input exceeds the maximum iteration limit."""
+
+    pass
