@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import pytest
 from openai import AsyncOpenAI
 
+from chat_cmpl_stream_handler._anthropic import AnthropicOpenAI
 from chat_cmpl_stream_handler._patch_stream_tool_call_index import apply
 
 apply()
@@ -53,6 +54,11 @@ PROVIDER_CONFIGS: dict[str, ProviderConfig] = {
         base_url="https://router.huggingface.co/v1",
         default_model="openai/gpt-oss-120b",
     ),
+    "anthropic": ProviderConfig(
+        env_var="ANTHROPIC_API_KEY",
+        base_url="https://api.anthropic.com/v1",
+        default_model="claude-haiku-4-5-20251001",
+    ),
 }
 
 
@@ -91,8 +97,14 @@ def llm_provider(request: pytest.FixtureRequest) -> LLMProvider:
     if not api_key:
         pytest.skip(f"{config.env_var} is not set")
 
-    client = AsyncOpenAI(
-        api_key=api_key,
-        **({"base_url": config.base_url} if config.base_url else {}),
-    )
+    if name == "anthropic":
+        client = AnthropicOpenAI(
+            api_key=api_key,
+            **({"base_url": config.base_url} if config.base_url else {}),
+        )
+    else:
+        client = AsyncOpenAI(
+            api_key=api_key,
+            **({"base_url": config.base_url} if config.base_url else {}),
+        )
     return LLMProvider(name=name, client=client, model=config.default_model)
