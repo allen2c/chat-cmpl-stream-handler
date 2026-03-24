@@ -22,6 +22,7 @@ all = []
 [tool.poetry.group.dev.dependencies]
 black = { extras = ["jupyter"], version = "*" }
 isort = "*"
+mkdocs-material = "*"
 openai-agents = "*"
 poetry-plugin-export = "*"
 pytest = "*"

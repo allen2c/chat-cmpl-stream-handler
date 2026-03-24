@@ -91,7 +91,10 @@ Subclass `ChatCompletionStreamHandler` and override any hook you need:
 
 ```python
 from chat_cmpl_stream_handler import ChatCompletionStreamHandler
-from openai.lib.streaming.chat._events import ContentDeltaEvent, FunctionToolCallArgumentsDoneEvent
+from openai.lib.streaming.chat._events import (
+    ContentDeltaEvent,
+    FunctionToolCallArgumentsDoneEvent,
+)
 
 
 class MyHandler(ChatCompletionStreamHandler):
