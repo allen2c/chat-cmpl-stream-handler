@@ -4,6 +4,7 @@
 [![Python Version](https://img.shields.io/pypi/pyversions/chat-cmpl-stream-handler.svg)](https://pypi.org/project/chat-cmpl-stream-handler/)
 [![License](https://img.shields.io/pypi/l/chat-cmpl-stream-handler.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://github.com/allen2c/chat-cmpl-stream-handler/actions/workflows/test.yml/badge.svg)](https://github.com/allen2c/chat-cmpl-stream-handler/actions/workflows/test.yml)
+[![Docs](https://img.shields.io/badge/docs-github%20pages-blue)](https://allen2c.github.io/chat-cmpl-stream-handler/)
 
 You've reimplemented the tool call loop for the fifth time. So have I. Never again.
 
