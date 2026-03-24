@@ -39,6 +39,7 @@ from openai.types.chat.chat_completion_message_function_tool_call_param import (
 from openai.types.chat.chat_completion_tool_message_param import (
     ChatCompletionToolMessageParam,
 )
+from openai.types.completion_usage import CompletionUsage
 from openai.types.shared.chat_model import ChatModel
 
 if TYPE_CHECKING:
@@ -66,6 +67,7 @@ async def stream_until_user_input(
     **kwargs,
 ) -> "StreamResult":
     current_messages = list(messages)
+    usages: List["CompletionUsage"] = []
 
     for _ in range(max_iterations):
         # 1. stream the response
@@ -82,6 +84,10 @@ async def stream_until_user_input(
                 await stream_handler.handle(event)
 
             final = await stream.get_final_completion()
+            if final.usage:
+                usages.append(
+                    CompletionUsage.model_validate_json(final.usage.model_dump_json())
+                )
 
         assistant_msg = final.choices[0].message
         current_messages.append(
@@ -110,7 +116,7 @@ async def stream_until_user_input(
 
         # 2. Check if there are tool calls
         if not assistant_msg.tool_calls:
-            return StreamResult(current_messages, model)  # End
+            return StreamResult(current_messages, model, usages=usages)  # End
 
         # 3. Execute tool calls, and add the results back to messages
         for tool_call in assistant_msg.tool_calls:
@@ -136,10 +142,15 @@ async def stream_until_user_input(
 
 class StreamResult:
     def __init__(
-        self, messages: List[ChatCompletionMessageParam], model: Union[str, ChatModel]
+        self,
+        messages: List[ChatCompletionMessageParam],
+        model: Union[str, ChatModel],
+        usages: List["CompletionUsage"],
     ):
         self._messages = messages
         self._model = model
+
+        self.usages = usages
 
     def to_input_list(self) -> List[ChatCompletionMessageParam]:
         return json.loads(json.dumps(self._messages, default=str))

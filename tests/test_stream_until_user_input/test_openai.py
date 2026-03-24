@@ -30,6 +30,7 @@ GET_WEATHER_TOOL: ChatCompletionToolParam = {
 
 
 async def get_weather_invoker(arguments: str, context: Any) -> str:
+    assert context == "test"
     args = json.loads(arguments)
     return f"The weather in {args['city']} is sunny and 25°C."
 
@@ -46,7 +47,11 @@ async def test_stream_until_user_input_with_tool_call(
         openai_client=openai_client,
         stream_handler=ChatCompletionStreamHandler(),
         tool_invokers={"get_weather": get_weather_invoker},
-        stream_kwargs={"tools": [GET_WEATHER_TOOL]},
+        stream_kwargs={
+            "tools": [GET_WEATHER_TOOL],
+            "stream_options": {"include_usage": True},
+        },
+        context="test",
     )
 
     assert isinstance(result, StreamResult)
@@ -56,3 +61,7 @@ async def test_stream_until_user_input_with_tool_call(
 
     # user → assistant (tool_calls) → tool → assistant (final)
     assert roles == ["user", "assistant", "tool", "assistant"]
+
+    # Check if the usages are not empty
+    assert len(result.usages) > 0
+    assert all(u.total_tokens for u in result.usages)
