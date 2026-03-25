@@ -47,7 +47,7 @@ PROVIDER_CONFIGS: dict[str, ProviderConfig] = {
     "gemini": ProviderConfig(
         env_var="GEMINI_API_KEY",
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        default_model="gemini-2.5-flash",
+        default_model="gemini-3.1-flash-lite-preview",
     ),
     "huggingface": ProviderConfig(
         env_var="HF_TOKEN",

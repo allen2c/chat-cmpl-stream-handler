@@ -195,6 +195,8 @@ apply()  # safe to call multiple times
 
 Put it at the top of `main.py`, or in `conftest.py` if you're testing. This is opt-in — the library won't silently monkey-patch anything on import.
 
+**Gemini 3 thought signatures:** Gemini 3 models require a `thought_signature` to be echoed back during multi-turn function calling. `stream_until_user_input` preserves these signatures automatically — no action needed on your side.
+
 ## License
 
 MIT
