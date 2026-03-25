@@ -45,7 +45,7 @@ from openai.types.shared.chat_model import ChatModel
 if TYPE_CHECKING:
     from openai.lib.streaming.chat._events import ChatCompletionStreamEvent
 
-__version__: Final[Text] = "0.2.0"
+__version__: Final[Text] = "0.2.1"
 
 
 logger = logging.getLogger(__name__)
@@ -104,6 +104,11 @@ async def stream_until_user_input(
                                     "name": tc.function.name,
                                     "arguments": tc.function.arguments or "{}",
                                 },
+                                **(
+                                    {"extra_content": tc.model_extra["extra_content"]}
+                                    if "extra_content" in getattr(tc, "model_extra", {})
+                                    else {}
+                                ),
                             )
                             for tc in assistant_msg.tool_calls
                         ]
