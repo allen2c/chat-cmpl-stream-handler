@@ -1,9 +1,11 @@
 import json
 import logging
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import (
     Any,
     AsyncIterator,
+    Awaitable,
     Callable,
     Dict,
     List,
@@ -32,6 +34,8 @@ _COMMON_SSE_PATHS: Sequence[str] = (
 )
 
 _TransportType = Text  # "sse" | "streamable_http"
+ToolFilterFn = Callable[[ToolParam], bool]
+ToolInvokerFn = Callable[[str, Any], Awaitable[str]]
 
 _endpoint_cache: Dict[str, Tuple[str, _TransportType]] = {}
 
@@ -124,6 +128,57 @@ async def list_mcp_tools(
     return [tp for tp in tool_params if filter_tool(tp)]
 
 
+async def build_mcp_tools_and_invokers(
+    servers: Sequence["MCPServerConfig"],
+) -> Tuple[List[ToolParam], Dict[str, ToolInvokerFn]]:
+    """Build ``(tools, tool_invokers)`` for ``stream_until_user_input``.
+
+    When a server config includes an initialized *session*, both tool
+    discovery and invocation reuse that session without reconnecting.
+    """
+    tools: List[ToolParam] = []
+    tool_invokers: Dict[str, ToolInvokerFn] = {}
+
+    for server in servers:
+        server_tools = await list_mcp_tools(
+            server.server_url,
+            server_label=server.server_label,
+            filter_tool=server.filter_tool,
+            extra_headers=server.extra_headers,
+            session=server.session,
+        )
+
+        for tool in server_tools:
+            tool_name = tool["function"]["name"]
+            if tool_name in tool_invokers:
+                raise ValueError(f"Duplicate MCP tool name: {tool_name}")
+
+            tool_invokers[tool_name] = _make_mcp_tool_invoker(
+                server.server_url,
+                tool_name,
+                server_label=server.server_label,
+                meta=server.meta,
+                extra_headers=server.extra_headers,
+                session=server.session,
+            )
+
+        tools.extend(server_tools)
+
+    return tools, tool_invokers
+
+
+@dataclass(frozen=True)
+class MCPServerConfig:
+    """Configuration for exposing one MCP server as chat tools."""
+
+    server_url: str
+    server_label: Optional[Text] = None
+    meta: Optional[Dict[str, Any]] = None
+    extra_headers: Optional[Dict[str, str]] = None
+    session: Optional[ClientSession] = None
+    filter_tool: ToolFilterFn = lambda _: True
+
+
 def _sanitize_schema_for_strict(schema: Dict[str, object]) -> Dict[str, object]:
     """Recursively transform a JSON Schema to satisfy OpenAI strict mode:
     strip ``title``, inject ``additionalProperties: false``,
@@ -174,6 +229,51 @@ def _mcp_tool_to_tool_param(
         function_def["description"] = tool.description
 
     return ToolParam(type="function", function=function_def)
+
+
+def _make_mcp_tool_invoker(
+    server_url: str,
+    tool_name: str,
+    *,
+    server_label: Optional[Text] = None,
+    meta: Optional[Dict[str, Any]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    session: Optional[ClientSession] = None,
+) -> ToolInvokerFn:
+    """Create a ``stream_until_user_input``-compatible invoker."""
+
+    async def _invoke(arguments: str, context: Any) -> str:
+        return await call_mcp_tool(
+            server_url,
+            tool_name,
+            arguments,
+            server_label=server_label,
+            meta=_merge_mcp_meta(meta, context),
+            extra_headers=extra_headers,
+            session=session,
+        )
+
+    return _invoke
+
+
+def _merge_mcp_meta(
+    meta: Optional[Dict[str, Any]],
+    context: Any,
+) -> Optional[Dict[str, Any]]:
+    """Merge invoker context into MCP meta without mutating caller data."""
+    if context is None:
+        return meta
+
+    if meta is None:
+        return {"context": context}
+
+    meta_copy = json.loads(json.dumps(meta, default=str))
+
+    if "context" in meta:
+        logger.warning("MCP meta key 'context' was overwritten by invoker context")
+
+    meta_copy["context"] = context
+    return meta_copy
 
 
 @asynccontextmanager
