@@ -112,7 +112,7 @@ async def stream_until_user_input(
     model: str | ChatModel,
     openai_client: AsyncOpenAI,
     *,
-    stream_handler: ChatCompletionStreamHandler[ResponseFormatT],
+    stream_handler: ChatCompletionStreamHandler[ResponseFormatT] | None = None,
     tool_invokers: dict[str, ToolInvokerFn] | None = None,
     stream_kwargs: dict[str, Any] | None = None,
     context: Any | None = None,
@@ -127,7 +127,7 @@ Streams a completion, executes tool calls, feeds results back, repeats — until
 | `messages`       | Initial message list                                                                    |
 | `model`          | Model name                                                                              |
 | `openai_client`  | `AsyncOpenAI` instance                                                                  |
-| `stream_handler` | Receives stream events                                                                  |
+| `stream_handler` | Receives stream events. Default: a no-op `ChatCompletionStreamHandler()`                |
 | `tool_invokers`  | `{"tool_name": async_fn}` — each fn takes `(arguments: str, context)` and returns `str` |
 | `stream_kwargs`  | Passed directly to `beta.chat.completions.stream()` (e.g. `tools`, `stream_options`)    |
 | `context`        | Forwarded to every tool invoker as-is                                                   |

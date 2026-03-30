@@ -59,7 +59,7 @@ async def stream_until_user_input(
     model: Union[str, ChatModel],
     openai_client: AsyncOpenAI,
     *,
-    stream_handler: "ChatCompletionStreamHandler[ResponseFormatT]",
+    stream_handler: "ChatCompletionStreamHandler[ResponseFormatT] | None" = None,
     tool_invokers: Dict[str, ToolInvokerFn] | None = None,
     stream_kwargs: Dict[Text, Any] | None = None,
     context: Any | None = None,
@@ -68,6 +68,7 @@ async def stream_until_user_input(
 ) -> "StreamResult":
     current_messages = list(messages)
     usages: List["CompletionUsage"] = []
+    active_stream_handler = stream_handler or ChatCompletionStreamHandler()
 
     for _ in range(max_iterations):
         # 1. stream the response
@@ -81,7 +82,7 @@ async def stream_until_user_input(
             },
         ) as stream:
             async for event in stream:
-                await stream_handler.handle(event)
+                await active_stream_handler.handle(event)
 
             final = await stream.get_final_completion()
             if final.usage:

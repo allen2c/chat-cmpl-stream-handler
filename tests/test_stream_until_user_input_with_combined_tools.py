@@ -4,6 +4,7 @@ from typing import Any
 import pytest
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionToolParam
+from pydantic import BaseModel
 
 from chat_cmpl_stream_handler import (
     ChatCompletionStreamHandler,
@@ -13,6 +14,10 @@ from chat_cmpl_stream_handler import (
 from chat_cmpl_stream_handler.utils.mcp import (
     MCPServerConfig,
     build_mcp_tools_and_invokers,
+)
+from chat_cmpl_stream_handler.utils.pydantic_to_tool import (
+    PydanticToolConfig,
+    build_pydantic_tools_and_invokers,
 )
 
 AWS_MCP_URL: str = "https://marketplace-mcp.us-east-1.api.aws/mcp"
@@ -40,14 +45,24 @@ async def get_weather_invoker(arguments: str, context: Any) -> str:
     return f"The weather in {args['city']} is sunny and 25°C."
 
 
+class EchoRequest(BaseModel):
+    text: str
+
+
+async def echo_invoker(arguments: EchoRequest, context: Any) -> str:
+    assert context == "test"
+    return f"echo:{arguments.text}"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "query_case",
     [
         "weather",
         "mcp",
+        "pydantic",
     ],
-    ids=["local-weather-tool", "mcp-tool"],
+    ids=["local-weather-tool", "mcp-tool", "pydantic-tool"],
 )
 async def test_stream_until_user_input_with_combined_tools(
     openai_client: AsyncOpenAI,
@@ -64,22 +79,39 @@ async def test_stream_until_user_input_with_combined_tools(
     )
     assert len(mcp_tools) > 0
 
-    all_tools = [GET_WEATHER_TOOL, *mcp_tools]
+    pydantic_tools, pydantic_tool_invokers = build_pydantic_tools_and_invokers(
+        [
+            PydanticToolConfig(
+                model=EchoRequest,
+                invoker=echo_invoker,
+            )
+        ]
+    )
+
+    all_tools = [GET_WEATHER_TOOL, *mcp_tools, *pydantic_tools]
     all_tool_invokers = {
         "get_weather": get_weather_invoker,
         **mcp_tool_invokers,
+        **pydantic_tool_invokers,
     }
 
     target_mcp_tool_name = mcp_tools[0]["function"]["name"]
+    target_pydantic_tool_name = pydantic_tools[0]["function"]["name"]
     if query_case == "weather":
         query = "What's the weather in Tokyo?"
         expected_tool_name = "get_weather"
-    else:
+    elif query_case == "mcp":
         query = (
             f"Call the tool `{target_mcp_tool_name}` with an empty JSON object, "
             "then summarize the result in one sentence."
         )
         expected_tool_name = target_mcp_tool_name
+    else:
+        query = (
+            f"Call the tool `{target_pydantic_tool_name}` with "
+            '{"text":"hello"} and then summarize the result in one sentence.'
+        )
+        expected_tool_name = target_pydantic_tool_name
 
     result = await stream_until_user_input(
         messages=[{"role": "user", "content": query}],
