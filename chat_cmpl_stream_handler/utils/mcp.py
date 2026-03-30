@@ -1,9 +1,22 @@
+import json
 import logging
-from typing import Callable, Dict, List, Optional, Sequence, Text
+from contextlib import asynccontextmanager
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Text,
+    Tuple,
+)
 
 import httpx
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.types import Tool as McpTool
 from openai.types.chat import ChatCompletionToolParam as ToolParam
 from openai.types.shared_params import FunctionDefinition
@@ -18,17 +31,103 @@ _COMMON_SSE_PATHS: Sequence[str] = (
     "/api/sse",
 )
 
+_TransportType = Text  # "sse" | "streamable_http"
+
+_endpoint_cache: Dict[str, Tuple[str, _TransportType]] = {}
+
+
+def clear_endpoint_cache() -> None:
+    """Clear the endpoint discovery cache."""
+    _endpoint_cache.clear()
+
+
+async def call_mcp_tool(
+    server_url: str,
+    tool_name: str,
+    arguments: str,
+    *,
+    server_label: Optional[Text] = None,
+    meta: Optional[Dict[str, Any]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> str:
+    """Connect to an MCP server and invoke a single tool by name.
+
+    If *server_label* is provided and *tool_name* starts with
+    ``{server_label}__``, the prefix is stripped before calling the
+    remote tool.
+
+    When the remote tool signals an error (``isError=True``), the
+    error content is still returned as a string so the LLM can
+    observe it.
+    """
+    actual_name = tool_name
+    if server_label:
+        prefix = f"{server_label}__"
+        if actual_name.startswith(prefix):
+            actual_name = actual_name[len(prefix) :]
+
+    parsed_args: Dict[str, object] = json.loads(arguments) if arguments else {}
+
+    base_url = server_url.rstrip("/")
+    for endpoint, transport in _connection_candidates(base_url):
+        logger.debug("Trying MCP %s endpoint: %s", transport, endpoint)
+
+        try:
+            async with _mcp_transport(endpoint, transport, extra_headers) as (
+                read,
+                write,
+            ):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.call_tool(
+                        actual_name, parsed_args, meta=meta
+                    )
+
+                    _endpoint_cache[base_url] = (endpoint, transport)
+
+                    if result.isError:
+                        logger.warning("MCP tool %s returned an error", actual_name)
+
+                    parts: List[str] = []
+                    for block in result.content:
+                        if hasattr(block, "text"):
+                            parts.append(block.text)
+                        else:
+                            parts.append(json.dumps(block.model_dump(), default=str))
+                    return "\n".join(parts)
+
+        except* httpx.HTTPStatusError as eg:
+            for exc in eg.exceptions:
+                logger.debug("HTTP %s at %s", exc.response.status_code, endpoint)
+
+        except* Exception as eg:
+            for exc in eg.exceptions:
+                logger.debug(
+                    "%s at %s: %s",
+                    type(exc).__name__,
+                    endpoint,
+                    str(exc).splitlines()[0] if str(exc) else "no details",
+                )
+
+    raise ConnectionError(
+        f"Failed to establish MCP connection to {base_url} "
+        f"(tried transports: streamable_http, sse)"
+    )
+
 
 async def list_mcp_tools(
     server_url: str,
     *,
     server_label: Optional[Text] = None,
     filter_tool: Callable[[ToolParam], bool] = lambda _: True,
+    extra_headers: Optional[Dict[str, str]] = None,
 ) -> List[ToolParam]:
-    """Connect to an MCP SSE server, discover tools, and return them
+    """Connect to an MCP server, discover tools, and return them
     as OpenAI-compatible ChatCompletionToolParam objects.
     """
-    mcp_tools: List[McpTool] = await _discover_and_connect(server_url)
+    mcp_tools: List[McpTool] = await _discover_and_connect(
+        server_url, extra_headers=extra_headers
+    )
     label_prefix: str = f"{server_label}__" if server_label else ""
 
     tool_params: List[ToolParam] = [
@@ -92,24 +191,30 @@ def _mcp_tool_to_tool_param(
 
 async def _discover_and_connect(
     base_url: str,
+    *,
+    extra_headers: Optional[Dict[str, str]] = None,
 ) -> List[McpTool]:
-    """Probe common SSE paths and return the tool list from the first
-    successful MCP handshake.
+    """Try streamable HTTP then SSE paths; return the tool list from
+    the first successful MCP handshake.
     """
     base_url = base_url.rstrip("/")
 
-    for path in _COMMON_SSE_PATHS:
-        endpoint: str = f"{base_url}{path}"
-        logger.debug("Probing MCP endpoint: %s", endpoint)
+    for endpoint, transport in _connection_candidates(base_url):
+        logger.debug("Trying MCP %s endpoint: %s", transport, endpoint)
 
         try:
-            async with sse_client(endpoint) as (read, write):
+            async with _mcp_transport(endpoint, transport, extra_headers) as (
+                read,
+                write,
+            ):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     result = await session.list_tools()
+                    _endpoint_cache[base_url] = (endpoint, transport)
                     logger.info(
-                        "Connected to MCP at %s — found %d tools",
+                        "Connected to MCP at %s via %s — found %d tools",
                         endpoint,
+                        transport,
                         len(result.tools),
                     )
                     return list(result.tools)
@@ -129,5 +234,39 @@ async def _discover_and_connect(
 
     raise ConnectionError(
         f"Failed to establish MCP connection to {base_url} "
-        f"(tried paths: {', '.join(p or '/' for p in _COMMON_SSE_PATHS)})"
+        f"(tried transports: streamable_http, sse)"
     )
+
+
+def _connection_candidates(base_url: str) -> List[Tuple[str, _TransportType]]:
+    """Return ``(endpoint, transport)`` pairs to try, cached first."""
+    candidates: List[Tuple[str, _TransportType]] = [
+        (base_url, "streamable_http"),
+    ]
+    for path in _COMMON_SSE_PATHS:
+        candidates.append((f"{base_url}{path}", "sse"))
+
+    cached = _endpoint_cache.get(base_url)
+    if cached and cached in candidates:
+        candidates.remove(cached)
+        candidates.insert(0, cached)
+
+    return candidates
+
+
+@asynccontextmanager
+async def _mcp_transport(
+    endpoint: str,
+    transport: _TransportType,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> AsyncIterator[Tuple[Any, Any]]:
+    """Open the right MCP transport and yield ``(read, write)``."""
+    if transport == "streamable_http":
+        kwargs: Dict[str, Any] = {}
+        if extra_headers:
+            kwargs["http_client"] = httpx.AsyncClient(headers=extra_headers)
+        async with streamable_http_client(endpoint, **kwargs) as (read, write, _):
+            yield read, write
+    else:
+        async with sse_client(endpoint, headers=extra_headers) as (read, write):
+            yield read, write

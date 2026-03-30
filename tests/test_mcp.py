@@ -1,8 +1,8 @@
 import pytest
 
-from chat_cmpl_stream_handler.utils.mcp import list_mcp_tools
+from chat_cmpl_stream_handler.utils.mcp import call_mcp_tool, list_mcp_tools
 
-COINGECKO_URL: str = "https://mcp.api.coingecko.com"
+AWS_MCP_URL: str = "https://marketplace-mcp.us-east-1.api.aws/mcp"
 
 
 @pytest.mark.asyncio
@@ -10,8 +10,8 @@ COINGECKO_URL: str = "https://mcp.api.coingecko.com"
     "server_label, filter_tool",
     [
         (None, None),
-        ("cg", None),
-        (None, lambda t: "simple" in t["function"]["name"]),
+        ("aws", None),
+        (None, lambda t: "search" in t["function"]["name"]),
     ],
     ids=["no-options", "with-label", "with-filter"],
 )
@@ -22,7 +22,7 @@ async def test_list_mcp_tools(server_label, filter_tool) -> None:
     if filter_tool is not None:
         kwargs["filter_tool"] = filter_tool
 
-    tools = await list_mcp_tools(COINGECKO_URL, **kwargs)
+    tools = await list_mcp_tools(AWS_MCP_URL, **kwargs)
     assert len(tools) > 0
 
     for tp in tools:
@@ -43,3 +43,18 @@ async def test_list_mcp_tools(server_label, filter_tool) -> None:
 
         if filter_tool:
             assert filter_tool(tp)
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool() -> None:
+    tools = await list_mcp_tools(AWS_MCP_URL)
+    first_tool = tools[0]["function"]
+
+    result = await call_mcp_tool(
+        AWS_MCP_URL,
+        f"aws__{first_tool['name']}",
+        "{}",
+        server_label="aws",
+    )
+    assert isinstance(result, str)
+    assert len(result) > 0
