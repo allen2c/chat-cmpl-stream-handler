@@ -49,8 +49,12 @@ async def call_mcp_tool(
     server_label: Optional[Text] = None,
     meta: Optional[Dict[str, Any]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
+    session: Optional[ClientSession] = None,
 ) -> str:
     """Connect to an MCP server and invoke a single tool by name.
+
+    If *session* is provided, it must already be initialized and is
+    used directly without endpoint discovery or reconnection.
 
     If *server_label* is provided and *tool_name* starts with
     ``{server_label}__``, the prefix is stripped before calling the
@@ -69,50 +73,23 @@ async def call_mcp_tool(
     parsed_args: Dict[str, object] = json.loads(arguments) if arguments else {}
 
     base_url = server_url.rstrip("/")
-    for endpoint, transport in _connection_candidates(base_url):
-        logger.debug("Trying MCP %s endpoint: %s", transport, endpoint)
+    async with _get_mcp_session(
+        base_url,
+        extra_headers=extra_headers,
+        session=session,
+    ) as active_session:
+        result = await active_session.call_tool(actual_name, parsed_args, meta=meta)
 
-        try:
-            async with _mcp_transport(endpoint, transport, extra_headers) as (
-                read,
-                write,
-            ):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    result = await session.call_tool(
-                        actual_name, parsed_args, meta=meta
-                    )
+        if result.isError:
+            logger.warning("MCP tool %s returned an error", actual_name)
 
-                    _endpoint_cache[base_url] = (endpoint, transport)
-
-                    if result.isError:
-                        logger.warning("MCP tool %s returned an error", actual_name)
-
-                    parts: List[str] = []
-                    for block in result.content:
-                        if hasattr(block, "text"):
-                            parts.append(block.text)
-                        else:
-                            parts.append(json.dumps(block.model_dump(), default=str))
-                    return "\n".join(parts)
-
-        except* httpx.HTTPStatusError as eg:
-            for exc in eg.exceptions:
-                logger.debug("HTTP %s at %s", exc.response.status_code, endpoint)
-
-        except* Exception as eg:
-            for exc in eg.exceptions:
-                logger.debug(
-                    "%s at %s: %s",
-                    type(exc).__name__,
-                    endpoint,
-                    str(exc).splitlines()[0] if str(exc) else "no details",
-                )
-
-    raise ConnectionError(
-        f"Failed to establish MCP connection to {base_url} "
-        f"(tried transports: streamable_http, sse)"
-    )
+        parts: List[str] = []
+        for block in result.content:
+            if hasattr(block, "text"):
+                parts.append(block.text)
+            else:
+                parts.append(json.dumps(block.model_dump(), default=str))
+        return "\n".join(parts)
 
 
 async def list_mcp_tools(
@@ -121,13 +98,23 @@ async def list_mcp_tools(
     server_label: Optional[Text] = None,
     filter_tool: Callable[[ToolParam], bool] = lambda _: True,
     extra_headers: Optional[Dict[str, str]] = None,
+    session: Optional[ClientSession] = None,
 ) -> List[ToolParam]:
     """Connect to an MCP server, discover tools, and return them
     as OpenAI-compatible ChatCompletionToolParam objects.
+
+    If *session* is provided, it must already be initialized and is
+    used directly without endpoint discovery or reconnection.
     """
-    mcp_tools: List[McpTool] = await _discover_and_connect(
-        server_url, extra_headers=extra_headers
-    )
+    base_url = server_url.rstrip("/")
+    async with _get_mcp_session(
+        base_url,
+        extra_headers=extra_headers,
+        session=session,
+    ) as active_session:
+        result = await active_session.list_tools()
+        mcp_tools: List[McpTool] = list(result.tools)
+
     label_prefix: str = f"{server_label}__" if server_label else ""
 
     tool_params: List[ToolParam] = [
@@ -189,15 +176,25 @@ def _mcp_tool_to_tool_param(
     return ToolParam(type="function", function=function_def)
 
 
-async def _discover_and_connect(
+@asynccontextmanager
+async def _get_mcp_session(
     base_url: str,
     *,
     extra_headers: Optional[Dict[str, str]] = None,
-) -> List[McpTool]:
-    """Try streamable HTTP then SSE paths; return the tool list from
-    the first successful MCP handshake.
+    session: Optional[ClientSession] = None,
+) -> AsyncIterator[ClientSession]:
+    """Yield an initialized MCP session.
+
+    If *session* is provided, it must already be initialized and is
+    yielded directly without endpoint discovery or reconnection.
     """
     base_url = base_url.rstrip("/")
+
+    if session is not None:
+        if session.get_server_capabilities() is None:
+            raise ValueError("session must be initialized before reuse")
+        yield session
+        return
 
     for endpoint, transport in _connection_candidates(base_url):
         logger.debug("Trying MCP %s endpoint: %s", transport, endpoint)
@@ -209,15 +206,10 @@ async def _discover_and_connect(
             ):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
-                    result = await session.list_tools()
                     _endpoint_cache[base_url] = (endpoint, transport)
-                    logger.info(
-                        "Connected to MCP at %s via %s — found %d tools",
-                        endpoint,
-                        transport,
-                        len(result.tools),
-                    )
-                    return list(result.tools)
+                    logger.info("Connected to MCP at %s via %s", endpoint, transport)
+                    yield session
+                    return
 
         except* httpx.HTTPStatusError as eg:
             for exc in eg.exceptions:
