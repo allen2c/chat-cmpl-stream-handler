@@ -31,7 +31,7 @@ pip install chat-cmpl-stream-handler
 import asyncio
 import json
 from openai import AsyncOpenAI
-from chat_cmpl_stream_handler import ChatCompletionStreamHandler, stream_until_user_input
+from chat_cmpl_stream_handler import stream_until_user_input
 
 client = AsyncOpenAI(api_key="...")
 
@@ -61,7 +61,6 @@ async def main():
         messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
         model="gpt-4.1-nano",
         openai_client=client,
-        stream_handler=ChatCompletionStreamHandler(),
         tool_invokers={"get_weather": get_weather},
         stream_kwargs={
             "tools": [GET_WEATHER_TOOL],
@@ -101,6 +100,89 @@ class PrintingHandler(ChatCompletionStreamHandler):
     ) -> None:
         print(f"\n[calling] {event.name}({event.arguments})")
 ```
+
+### Building tools from MCP servers
+
+If you already expose capabilities through an MCP server, you can turn them into
+OpenAI-compatible `tools` plus `tool_invokers` in one step:
+
+```python
+from chat_cmpl_stream_handler.utils.mcp import MCPServerConfig, build_mcp_tools_and_invokers
+
+
+mcp_tools, mcp_tool_invokers = await build_mcp_tools_and_invokers(
+    [
+        MCPServerConfig(
+            server_url="https://marketplace-mcp.us-east-1.api.aws/mcp",
+            server_label="aws",
+        )
+    ]
+)
+
+result = await stream_until_user_input(
+    messages=[{"role": "user", "content": "Use aws__get_cost_and_usage and summarize it."}],
+    model="gpt-4.1",
+    openai_client=client,
+    tool_invokers=mcp_tool_invokers,
+    stream_kwargs={"tools": mcp_tools},
+)
+```
+
+Notes:
+
+- `server_label="aws"` prefixes discovered tools like `aws__tool_name`
+- if you pass an initialized `ClientSession` into `MCPServerConfig(session=...)`,
+  tool discovery and tool calls reuse that session without reconnecting
+- runtime `context` from `stream_until_user_input(..., context=...)` is forwarded
+  into MCP `meta["context"]`
+
+### Building tools from Pydantic models
+
+For local tools with typed inputs, use the Pydantic helpers directly from
+`chat_cmpl_stream_handler.utils`:
+
+```python
+from typing import Any
+
+from pydantic import BaseModel
+
+from chat_cmpl_stream_handler.utils.pydantic_to_tool import (
+    PydanticToolConfig,
+    build_pydantic_tools_and_invokers,
+)
+
+
+class EchoRequest(BaseModel):
+    """Echo text back to the user."""
+
+    text: str
+
+
+async def echo_tool(arguments: EchoRequest, context: Any) -> str:
+    return f"{context}: {arguments.text}"
+
+
+pydantic_tools, pydantic_tool_invokers = build_pydantic_tools_and_invokers(
+    [
+        PydanticToolConfig(
+            model=EchoRequest,
+            invoker=echo_tool,
+        )
+    ]
+)
+
+result = await stream_until_user_input(
+    messages=[{"role": "user", "content": "Call echo_request with text=hello"}],
+    model="gpt-4.1",
+    openai_client=client,
+    tool_invokers=pydantic_tool_invokers,
+    stream_kwargs={"tools": pydantic_tools},
+    context="demo",
+)
+```
+
+The generated invoker validates the tool arguments with
+`model_validate_json(...)` before calling your handler.
 
 ## API Reference
 
@@ -175,7 +257,6 @@ result = await stream_until_user_input(
     messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
     model="claude-haiku-4-5-20251001",
     openai_client=client,
-    stream_handler=ChatCompletionStreamHandler(),
     tool_invokers={"get_weather": get_weather},
     stream_kwargs={"tools": [GET_WEATHER_TOOL]},
 )
