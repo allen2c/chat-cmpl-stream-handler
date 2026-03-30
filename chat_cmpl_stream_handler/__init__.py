@@ -45,7 +45,7 @@ from openai.types.shared.chat_model import ChatModel
 if TYPE_CHECKING:
     from openai.lib.streaming.chat._events import ChatCompletionStreamEvent
 
-__version__: Final[Text] = "0.2.1"
+__version__: Final[Text] = "0.2.2"
 
 
 logger = logging.getLogger(__name__)
