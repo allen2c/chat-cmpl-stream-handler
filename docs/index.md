@@ -31,7 +31,7 @@ pip install chat-cmpl-stream-handler
 import asyncio
 import json
 from openai import AsyncOpenAI
-from chat_cmpl_stream_handler import ChatCompletionStreamHandler, stream_until_user_input
+from chat_cmpl_stream_handler import stream_until_user_input
 
 client = AsyncOpenAI(api_key="...")
 
@@ -61,7 +61,6 @@ async def main():
         messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
         model="gpt-4.1-nano",
         openai_client=client,
-        stream_handler=ChatCompletionStreamHandler(),
         tool_invokers={"get_weather": get_weather},
         stream_kwargs={
             "tools": [GET_WEATHER_TOOL],
@@ -102,6 +101,89 @@ class PrintingHandler(ChatCompletionStreamHandler):
         print(f"\n[calling] {event.name}({event.arguments})")
 ```
 
+### Building tools from MCP servers
+
+If you already expose capabilities through an MCP server, you can turn them into
+OpenAI-compatible `tools` plus `tool_invokers` in one step:
+
+```python
+from chat_cmpl_stream_handler.utils.mcp import MCPServerConfig, build_mcp_tools_and_invokers
+
+
+mcp_tools, mcp_tool_invokers = await build_mcp_tools_and_invokers(
+    [
+        MCPServerConfig(
+            server_url="https://marketplace-mcp.us-east-1.api.aws/mcp",
+            server_label="aws",
+        )
+    ]
+)
+
+result = await stream_until_user_input(
+    messages=[{"role": "user", "content": "Use aws__get_cost_and_usage and summarize it."}],
+    model="gpt-4.1",
+    openai_client=client,
+    tool_invokers=mcp_tool_invokers,
+    stream_kwargs={"tools": mcp_tools},
+)
+```
+
+Notes:
+
+- `server_label="aws"` prefixes discovered tools like `aws__tool_name`
+- if you pass an initialized `ClientSession` into `MCPServerConfig(session=...)`,
+  tool discovery and tool calls reuse that session without reconnecting
+- runtime `context` from `stream_until_user_input(..., context=...)` is forwarded
+  into MCP `meta["context"]`
+
+### Building tools from Pydantic models
+
+For local tools with typed inputs, use the Pydantic helpers directly from
+`chat_cmpl_stream_handler.utils`:
+
+```python
+from typing import Any
+
+from pydantic import BaseModel
+
+from chat_cmpl_stream_handler.utils.pydantic_to_tool import (
+    PydanticToolConfig,
+    build_pydantic_tools_and_invokers,
+)
+
+
+class EchoRequest(BaseModel):
+    """Echo text back to the user."""
+
+    text: str
+
+
+async def echo_tool(arguments: EchoRequest, context: Any) -> str:
+    return f"{context}: {arguments.text}"
+
+
+pydantic_tools, pydantic_tool_invokers = build_pydantic_tools_and_invokers(
+    [
+        PydanticToolConfig(
+            model=EchoRequest,
+            invoker=echo_tool,
+        )
+    ]
+)
+
+result = await stream_until_user_input(
+    messages=[{"role": "user", "content": "Call echo_request with text=hello"}],
+    model="gpt-4.1",
+    openai_client=client,
+    tool_invokers=pydantic_tool_invokers,
+    stream_kwargs={"tools": pydantic_tools},
+    context="demo",
+)
+```
+
+The generated invoker validates the tool arguments with
+`model_validate_json(...)` before calling your handler.
+
 ## API Reference
 
 ### `stream_until_user_input`
@@ -112,7 +194,7 @@ async def stream_until_user_input(
     model: str | ChatModel,
     openai_client: AsyncOpenAI,
     *,
-    stream_handler: ChatCompletionStreamHandler[ResponseFormatT],
+    stream_handler: ChatCompletionStreamHandler[ResponseFormatT] | None = None,
     tool_invokers: dict[str, ToolInvokerFn] | None = None,
     stream_kwargs: dict[str, Any] | None = None,
     context: Any | None = None,
@@ -127,7 +209,7 @@ Streams a completion, executes tool calls, feeds results back, repeats — until
 | `messages`       | Initial message list                                                                    |
 | `model`          | Model name                                                                              |
 | `openai_client`  | `AsyncOpenAI` instance                                                                  |
-| `stream_handler` | Receives stream events                                                                  |
+| `stream_handler` | Receives stream events. Default: a no-op `ChatCompletionStreamHandler()`                |
 | `tool_invokers`  | `{"tool_name": async_fn}` — each fn takes `(arguments: str, context)` and returns `str` |
 | `stream_kwargs`  | Passed directly to `beta.chat.completions.stream()` (e.g. `tools`, `stream_options`)    |
 | `context`        | Forwarded to every tool invoker as-is                                                   |
@@ -175,7 +257,6 @@ result = await stream_until_user_input(
     messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
     model="claude-haiku-4-5-20251001",
     openai_client=client,
-    stream_handler=ChatCompletionStreamHandler(),
     tool_invokers={"get_weather": get_weather},
     stream_kwargs={"tools": [GET_WEATHER_TOOL]},
 )
