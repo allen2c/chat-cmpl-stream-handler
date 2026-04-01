@@ -45,6 +45,10 @@ from openai.types.chat.chat_completion_tool_message_param import (
 from openai.types.completion_usage import CompletionUsage
 from openai.types.shared.chat_model import ChatModel
 
+from chat_cmpl_stream_handler.utils.tool_call import (  # noqa: F401
+    args_from_tool_call as args_from_tool_call,
+)
+
 if TYPE_CHECKING:
     from openai.lib.streaming.chat._events import ChatCompletionStreamEvent
 
@@ -55,13 +59,6 @@ logger = logging.getLogger(__name__)
 
 
 ToolInvokerFn = Callable[[ChatCompletionMessageToolCall, Any], Awaitable[str]]
-
-
-def args_from_tool_call(tool_call: ChatCompletionMessageToolCall) -> Dict[str, Any]:
-    """Parse tool call arguments JSON into a dictionary."""
-    return (
-        json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
-    )
 
 
 async def stream_until_user_input(
