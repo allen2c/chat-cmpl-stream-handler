@@ -1,14 +1,17 @@
 """Tests for AnthropicOpenAI compatibility with stream_until_user_input."""
 
-import json
 import os
 from typing import Any
 
 import pytest
+from openai.types.chat.chat_completion_message_tool_call import (
+    ChatCompletionMessageToolCall,
+)
 
 from chat_cmpl_stream_handler import (
     ChatCompletionStreamHandler,
     StreamResult,
+    args_from_tool_call,
     stream_until_user_input,
 )
 from chat_cmpl_stream_handler._anthropic import AnthropicOpenAI
@@ -29,8 +32,10 @@ GET_WEATHER_TOOL = {
 }
 
 
-async def get_weather_invoker(arguments: str, context: Any) -> str:
-    args = json.loads(arguments)
+async def get_weather_invoker(
+    tool_call: ChatCompletionMessageToolCall, context: Any
+) -> str:
+    args = args_from_tool_call(tool_call)
     return f"The weather in {args['city']} is sunny and 25°C."
 
 

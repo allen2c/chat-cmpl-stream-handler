@@ -3,12 +3,15 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple, Type
 
 from openai.types.chat import ChatCompletionToolParam as ToolParam
+from openai.types.chat.chat_completion_message_tool_call import (
+    ChatCompletionMessageToolCall,
+)
 from openai.types.shared_params import FunctionDefinition
 from pydantic import BaseModel
 
 from chat_cmpl_stream_handler.utils.camel_to_snake import camel_to_snake
 
-ToolInvokerFn = Callable[[str, Any], Awaitable[str]]
+ToolInvokerFn = Callable[[ChatCompletionMessageToolCall, Any], Awaitable[str]]
 PydanticToolHandlerFn = Callable[[BaseModel, Any], Awaitable[str]]
 
 
@@ -81,8 +84,10 @@ def _make_pydantic_tool_invoker(
 ) -> ToolInvokerFn:
     """Create a ``stream_until_user_input``-compatible invoker."""
 
-    async def _invoke(arguments: str, context: Any) -> str:
-        validated_input = model.model_validate_json(arguments or "{}")
+    async def _invoke(tool_call: ChatCompletionMessageToolCall, context: Any) -> str:
+        validated_input = model.model_validate_json(
+            tool_call.function.arguments or "{}"
+        )
         return await invoker(validated_input, context)
 
     return _invoke

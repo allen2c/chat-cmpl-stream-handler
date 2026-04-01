@@ -36,6 +36,9 @@ from openai.types.chat.chat_completion_assistant_message_param import (
 from openai.types.chat.chat_completion_message_function_tool_call_param import (
     ChatCompletionMessageFunctionToolCallParam,
 )
+from openai.types.chat.chat_completion_message_tool_call import (
+    ChatCompletionMessageToolCall,
+)
 from openai.types.chat.chat_completion_tool_message_param import (
     ChatCompletionToolMessageParam,
 )
@@ -51,7 +54,14 @@ __version__: Final[Text] = "0.3.0"
 logger = logging.getLogger(__name__)
 
 
-ToolInvokerFn = Callable[[str, Any], Awaitable[str]]
+ToolInvokerFn = Callable[[ChatCompletionMessageToolCall, Any], Awaitable[str]]
+
+
+def args_from_tool_call(tool_call: ChatCompletionMessageToolCall) -> Dict[str, Any]:
+    """Parse tool call arguments JSON into a dictionary."""
+    return (
+        json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+    )
 
 
 async def stream_until_user_input(
@@ -131,7 +141,7 @@ async def stream_until_user_input(
             if invoker is None:
                 raise ValueError(f"No invoker for tool: {tool_call.function.name}")
 
-            tool_call_output = await invoker(tool_call.function.arguments, context)
+            tool_call_output = await invoker(tool_call, context)
 
             current_messages.append(
                 ChatCompletionToolMessageParam(
