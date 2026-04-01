@@ -36,22 +36,29 @@ from openai.types.chat.chat_completion_assistant_message_param import (
 from openai.types.chat.chat_completion_message_function_tool_call_param import (
     ChatCompletionMessageFunctionToolCallParam,
 )
+from openai.types.chat.chat_completion_message_tool_call import (
+    ChatCompletionMessageToolCall,
+)
 from openai.types.chat.chat_completion_tool_message_param import (
     ChatCompletionToolMessageParam,
 )
 from openai.types.completion_usage import CompletionUsage
 from openai.types.shared.chat_model import ChatModel
 
+from chat_cmpl_stream_handler.utils.tool_call import (  # noqa: F401
+    args_from_tool_call as args_from_tool_call,
+)
+
 if TYPE_CHECKING:
     from openai.lib.streaming.chat._events import ChatCompletionStreamEvent
 
-__version__: Final[Text] = "0.2.2"
+__version__: Final[Text] = "0.3.0"
 
 
 logger = logging.getLogger(__name__)
 
 
-ToolInvokerFn = Callable[[str, Any], Awaitable[str]]
+ToolInvokerFn = Callable[[ChatCompletionMessageToolCall, Any], Awaitable[str]]
 
 
 async def stream_until_user_input(
@@ -131,7 +138,7 @@ async def stream_until_user_input(
             if invoker is None:
                 raise ValueError(f"No invoker for tool: {tool_call.function.name}")
 
-            tool_call_output = await invoker(tool_call.function.arguments, context)
+            tool_call_output = await invoker(tool_call, context)
 
             current_messages.append(
                 ChatCompletionToolMessageParam(

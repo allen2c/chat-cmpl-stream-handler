@@ -1,12 +1,15 @@
-import json
 from typing import Any
 
 import pytest
 from openai.types.chat import ChatCompletionToolParam
+from openai.types.chat.chat_completion_message_tool_call import (
+    ChatCompletionMessageToolCall,
+)
 
 from chat_cmpl_stream_handler import (
     ChatCompletionStreamHandler,
     StreamResult,
+    args_from_tool_call,
     stream_until_user_input,
 )
 from tests.conftest import LLMProvider
@@ -29,9 +32,11 @@ GET_WEATHER_TOOL: ChatCompletionToolParam = {
 }
 
 
-async def get_weather_invoker(arguments: str, context: Any) -> str:
+async def get_weather_invoker(
+    tool_call: ChatCompletionMessageToolCall, context: Any
+) -> str:
     assert context == "test"
-    args = json.loads(arguments)
+    args = args_from_tool_call(tool_call)
     return f"The weather in {args['city']} is sunny and 25°C."
 
 

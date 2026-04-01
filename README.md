@@ -29,9 +29,9 @@ pip install chat-cmpl-stream-handler
 
 ```python
 import asyncio
-import json
 from openai import AsyncOpenAI
-from chat_cmpl_stream_handler import stream_until_user_input
+from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall
+from chat_cmpl_stream_handler import args_from_tool_call, stream_until_user_input
 
 client = AsyncOpenAI(api_key="...")
 
@@ -51,8 +51,8 @@ GET_WEATHER_TOOL = {
 }
 
 
-async def get_weather(arguments: str, context) -> str:
-    args = json.loads(arguments)
+async def get_weather(tool_call: ChatCompletionMessageToolCall, context) -> str:
+    args = args_from_tool_call(tool_call)
     return f"The weather in {args['city']} is sunny and 25°C."
 
 
@@ -201,16 +201,32 @@ async def stream_until_user_input(
 
 Streams a completion, executes tool calls, feeds results back, repeats — until the model stops asking for tools. Raises `MaxIterationsReached` if you've somehow ended up in an infinite tool call loop (it happens).
 
-| Parameter        | Description                                                                             |
-|------------------|-----------------------------------------------------------------------------------------|
-| `messages`       | Initial message list                                                                    |
-| `model`          | Model name                                                                              |
-| `openai_client`  | `AsyncOpenAI` instance                                                                  |
-| `stream_handler` | Receives stream events. Default: a no-op `ChatCompletionStreamHandler()`                |
-| `tool_invokers`  | `{"tool_name": async_fn}` — each fn takes `(arguments: str, context)` and returns `str` |
-| `stream_kwargs`  | Passed directly to `beta.chat.completions.stream()` (e.g. `tools`, `stream_options`)    |
-| `context`        | Forwarded to every tool invoker as-is                                                   |
-| `max_iterations` | Safety cap. Default: 10                                                                 |
+| Parameter        | Description                                                                                                        |
+|------------------|--------------------------------------------------------------------------------------------------------------------|
+| `messages`       | Initial message list                                                                                               |
+| `model`          | Model name                                                                                                         |
+| `openai_client`  | `AsyncOpenAI` instance                                                                                             |
+| `stream_handler` | Receives stream events. Default: a no-op `ChatCompletionStreamHandler()`                                           |
+| `tool_invokers`  | `{"tool_name": async_fn}` — each fn takes `(tool_call: ChatCompletionMessageToolCall, context)` and returns `str`  |
+| `stream_kwargs`  | Passed directly to `beta.chat.completions.stream()` (e.g. `tools`, `stream_options`)                               |
+| `context`        | Forwarded to every tool invoker as-is                                                                              |
+| `max_iterations` | Safety cap. Default: 10                                                                                            |
+
+### `ToolInvokerFn`
+
+```python
+ToolInvokerFn = Callable[[ChatCompletionMessageToolCall, Any], Awaitable[str]]
+```
+
+Each tool invoker receives the full `ChatCompletionMessageToolCall` object from the OpenAI response. This gives you access to `tool_call.id`, `tool_call.function.name`, and `tool_call.function.arguments` — useful for tracing, logging, or emitting SSE events with the real tool call id.
+
+### `args_from_tool_call`
+
+```python
+def args_from_tool_call(tool_call: ChatCompletionMessageToolCall) -> dict[str, Any]
+```
+
+Convenience helper that parses `tool_call.function.arguments` into a dictionary. Handles empty arguments gracefully.
 
 ### `StreamResult`
 

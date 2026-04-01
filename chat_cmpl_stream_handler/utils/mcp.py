@@ -21,6 +21,9 @@ from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import Tool as McpTool
 from openai.types.chat import ChatCompletionToolParam as ToolParam
+from openai.types.chat.chat_completion_message_tool_call import (
+    ChatCompletionMessageToolCall,
+)
 from openai.types.shared_params import FunctionDefinition
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -35,7 +38,7 @@ _COMMON_SSE_PATHS: Sequence[str] = (
 
 _TransportType = Text  # "sse" | "streamable_http"
 ToolFilterFn = Callable[[ToolParam], bool]
-ToolInvokerFn = Callable[[str, Any], Awaitable[str]]
+ToolInvokerFn = Callable[[ChatCompletionMessageToolCall, Any], Awaitable[str]]
 
 _endpoint_cache: Dict[str, Tuple[str, _TransportType]] = {}
 
@@ -242,11 +245,11 @@ def _make_mcp_tool_invoker(
 ) -> ToolInvokerFn:
     """Create a ``stream_until_user_input``-compatible invoker."""
 
-    async def _invoke(arguments: str, context: Any) -> str:
+    async def _invoke(tool_call: ChatCompletionMessageToolCall, context: Any) -> str:
         return await call_mcp_tool(
             server_url,
             tool_name,
-            arguments,
+            tool_call.function.arguments,
             server_label=server_label,
             meta=_merge_mcp_meta(meta, context),
             extra_headers=extra_headers,
