@@ -10,6 +10,7 @@ from typing import (
     Generic,
     Iterable,
     List,
+    Optional,
     Text,
     Union,
 )
@@ -33,6 +34,9 @@ from openai.types.chat import ChatCompletionMessageParam
 from openai.types.chat.chat_completion_assistant_message_param import (
     ChatCompletionAssistantMessageParam,
 )
+from openai.types.chat.chat_completion_message_function_tool_call import (
+    ChatCompletionMessageFunctionToolCall,
+)
 from openai.types.chat.chat_completion_message_function_tool_call_param import (
     ChatCompletionMessageFunctionToolCallParam,
 )
@@ -52,7 +56,7 @@ from chat_cmpl_stream_handler.utils.tool_call import (  # noqa: F401
 if TYPE_CHECKING:
     from openai.lib.streaming.chat._events import ChatCompletionStreamEvent
 
-__version__: Final[Text] = "0.3.0"
+__version__: Final[Text] = "0.3.1"
 
 
 logger = logging.getLogger(__name__)
@@ -71,6 +75,9 @@ async def stream_until_user_input(
     stream_kwargs: Dict[Text, Any] | None = None,
     context: Any | None = None,
     max_iterations: int = 10,
+    tool_call_output_callback: Optional[
+        Callable[[ChatCompletionMessageFunctionToolCall, str], Awaitable[None]]
+    ] = None,
     **kwargs,
 ) -> "StreamResult":
     current_messages = list(messages)
@@ -147,6 +154,9 @@ async def stream_until_user_input(
                     content=tool_call_output,
                 )
             )
+
+            if tool_call_output_callback is not None:
+                await tool_call_output_callback(tool_call, tool_call_output)
 
     raise MaxIterationsReached(
         f"Reached max_iterations={max_iterations} without waiting for user input."
