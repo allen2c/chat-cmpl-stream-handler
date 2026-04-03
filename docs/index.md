@@ -211,7 +211,7 @@ Streams a completion, executes tool calls, feeds results back, repeats — until
 | `openai_client`  | `AsyncOpenAI` instance                                                                                             |
 | `stream_handler` | Receives stream events. Default: a no-op `ChatCompletionStreamHandler()`                                           |
 | `tool_invokers`  | `{"tool_name": async_fn}` — each fn takes `(tool_call: ChatCompletionMessageToolCall, context)` and returns `str`  |
-| `stream_kwargs`  | Passed directly to `beta.chat.completions.stream()` (e.g. `tools`, `stream_options`)                               |
+| `stream_kwargs`  | Passed directly to `chat.completions.create()` (e.g. `tools`, `stream_options`)                                    |
 | `context`        | Forwarded to every tool invoker as-is                                                                              |
 | `max_iterations` | Safety cap. Default: 10                                                                                            |
 
@@ -263,26 +263,23 @@ Works with any OpenAI-compatible endpoint. Some providers are more compatible th
 
 ### Anthropic
 
-Anthropic's Messages API is not OpenAI-compatible. Use the included `AnthropicOpenAI` adapter — a drop-in `AsyncOpenAI` subclass that translates requests under the hood (no extra dependencies required):
+Anthropic exposes an OpenAI-compatible endpoint — no adapter needed. Use a plain `AsyncOpenAI` with the Anthropic base URL:
 
 ```python
-from chat_cmpl_stream_handler._anthropic import AnthropicOpenAI
+from openai import AsyncOpenAI
 
-client = AnthropicOpenAI(api_key="sk-ant-...")
+client = AsyncOpenAI(api_key="sk-ant-...", base_url="https://api.anthropic.com/v1")
 result = await stream_until_user_input(
     messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
     model="claude-haiku-4-5-20251001",
     openai_client=client,
     tool_invokers={"get_weather": get_weather},
-    stream_kwargs={"tools": [GET_WEATHER_TOOL]},
+    stream_kwargs={
+        "tools": [GET_WEATHER_TOOL],
+        "stream_options": {"include_usage": True},
+    },
 )
 ```
-
-A few differences from OpenAI to be aware of:
-
-- Usage is always returned — no need to pass `stream_options: {"include_usage": True}`.
-- The `strict` field in tool definitions is silently ignored (Anthropic doesn't support it).
-- OpenAI-only keys (`stream_options`, `response_format`) are stripped before the request is sent.
 
 ### Gemini
 

@@ -17,6 +17,7 @@ from typing import (
 
 from openai import AsyncOpenAI
 from openai.lib._parsing._completions import ResponseFormatT
+from openai.lib.streaming.chat import ChatCompletionStreamState
 from openai.lib.streaming.chat._events import (
     ChunkEvent,
     ContentDeltaEvent,
@@ -56,7 +57,7 @@ from chat_cmpl_stream_handler.utils.tool_call import (  # noqa: F401
 if TYPE_CHECKING:
     from openai.lib.streaming.chat._events import ChatCompletionStreamEvent
 
-__version__: Final[Text] = "0.3.1"
+__version__: Final[Text] = "0.4.0"
 
 
 logger = logging.getLogger(__name__)
@@ -86,23 +87,27 @@ async def stream_until_user_input(
 
     for _ in range(max_iterations):
         # 1. stream the response
-        async with openai_client.beta.chat.completions.stream(
+        state = ChatCompletionStreamState()
+        stream = await openai_client.chat.completions.create(
             messages=current_messages,
             model=model,
+            stream=True,
             **{
                 k: v
                 for k, v in (stream_kwargs or {}).items()
-                if k not in ("messages", "model")
+                if k not in ("messages", "model", "stream")
             },
-        ) as stream:
-            async for event in stream:
+        )
+
+        async for chunk in stream:
+            for event in state.handle_chunk(chunk):
                 await active_stream_handler.handle(event)
 
-            final = await stream.get_final_completion()
-            if final.usage:
-                usages.append(
-                    CompletionUsage.model_validate_json(final.usage.model_dump_json())
-                )
+        final = state.get_final_completion()
+        if final.usage:
+            usages.append(
+                CompletionUsage.model_validate_json(final.usage.model_dump_json())
+            )
 
         assistant_msg = final.choices[0].message
         current_messages.append(
