@@ -4,7 +4,6 @@ from dataclasses import dataclass
 import pytest
 from openai import AsyncOpenAI
 
-from chat_cmpl_stream_handler._anthropic import AnthropicOpenAI
 from chat_cmpl_stream_handler._patch_stream_tool_call_index import apply
 
 apply()
@@ -102,14 +101,8 @@ def llm_provider(request: pytest.FixtureRequest) -> LLMProvider:
     if not api_key:
         pytest.skip(f"{config.env_var} is not set")
 
-    if name == "anthropic":
-        client = AnthropicOpenAI(
-            api_key=api_key,
-            **({"base_url": config.base_url} if config.base_url else {}),
-        )
-    else:
-        client = AsyncOpenAI(
-            api_key=api_key,
-            **({"base_url": config.base_url} if config.base_url else {}),
-        )
+    client = AsyncOpenAI(
+        api_key=api_key,
+        **({"base_url": config.base_url} if config.base_url else {}),
+    )
     return LLMProvider(name=name, client=client, model=config.default_model)
