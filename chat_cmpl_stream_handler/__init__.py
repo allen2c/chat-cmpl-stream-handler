@@ -57,7 +57,7 @@ from chat_cmpl_stream_handler.utils.tool_call import (  # noqa: F401
 if TYPE_CHECKING:
     from openai.lib.streaming.chat._events import ChatCompletionStreamEvent
 
-__version__: Final[Text] = "0.4.0"
+__version__: Final[Text] = "0.4.1"
 
 
 logger = logging.getLogger(__name__)
