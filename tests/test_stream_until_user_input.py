@@ -8,6 +8,7 @@ from openai.types.chat.chat_completion_message_tool_call import (
 
 from chat_cmpl_stream_handler import (
     ChatCompletionStreamHandler,
+    FunctionTool,
     StreamResult,
     args_from_tool_call,
     stream_until_user_input,
@@ -40,24 +41,42 @@ async def get_weather_invoker(
     return f"The weather in {args['city']} is sunny and 25°C."
 
 
+@pytest.mark.parametrize("via", ["dict", "tool"])
 @pytest.mark.asyncio
-async def test_stream_until_user_input_with_tool_call(llm_provider: LLMProvider):
+async def test_stream_until_user_input_with_tool_call(
+    llm_provider: LLMProvider, via: str
+):
     openai_client = llm_provider.client
     model = llm_provider.model
 
     messages = [{"role": "user", "content": "What's the weather in Tokyo?"}]
+
+    if via == "dict":
+        extra_kwargs: dict[str, Any] = dict(
+            tool_invokers={"get_weather": get_weather_invoker},
+            stream_kwargs={
+                "tools": [GET_WEATHER_TOOL],
+                "stream_options": {"include_usage": True},
+            },
+        )
+    else:
+        extra_kwargs = dict(
+            tools=[
+                FunctionTool(
+                    tool_param=GET_WEATHER_TOOL,
+                    invoker=get_weather_invoker,
+                )
+            ],
+            stream_kwargs={"stream_options": {"include_usage": True}},
+        )
 
     result = await stream_until_user_input(
         messages=messages,
         model=model,
         openai_client=openai_client,
         stream_handler=ChatCompletionStreamHandler(),
-        tool_invokers={"get_weather": get_weather_invoker},
-        stream_kwargs={
-            "tools": [GET_WEATHER_TOOL],
-            "stream_options": {"include_usage": True},
-        },
         context="test",
+        **extra_kwargs,
     )
 
     assert isinstance(result, StreamResult)

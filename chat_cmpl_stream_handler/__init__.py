@@ -132,11 +132,11 @@ async def stream_until_user_input(
     model: Union[str, ChatModel],
     openai_client: AsyncOpenAI,
     *,
-    stream_handler: "ChatCompletionStreamHandler[ResponseFormatT] | None" = None,
-    tools: "Sequence[Union[Tool, ChatCompletionToolParam]] | None" = None,
-    tool_invokers: Dict[str, ToolInvokerFn] | None = None,
-    stream_kwargs: Dict[Text, Any] | None = None,
-    context: Any | None = None,
+    stream_handler: Optional["ChatCompletionStreamHandler[ResponseFormatT]"] = None,
+    tools: Optional[Sequence[Union["Tool", ChatCompletionToolParam]]] = None,
+    tool_invokers: Optional[Dict[str, ToolInvokerFn]] = None,
+    stream_kwargs: Optional[Dict[Text, Any]] = None,
+    context: Optional[Any] = None,
     max_iterations: int = 10,
     tool_call_output_callback: Optional[
         Callable[[ChatCompletionMessageFunctionToolCall, str], Awaitable[None]]
