@@ -1,5 +1,18 @@
+"""Streaming chat completion utilities with tool-call orchestration.
+
+Public surface:
+
+* ``stream_until_user_invoker`` / ``merge_tools_and_invokers`` — the loop
+  and its tool-source merger.
+* ``Tool`` / ``FunctionTool`` — optional ergonomic packaging for
+  ``(schema, invoker)`` pairs.
+* ``ChatCompletionStreamHandler`` / ``StreamResult`` /
+  ``MaxIterationsReached`` — observation, result, and error types.
+"""
+
 import json
 import logging
+from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -11,8 +24,12 @@ from typing import (
     Iterable,
     List,
     Optional,
+    Protocol,
+    Sequence,
     Text,
+    Tuple,
     Union,
+    runtime_checkable,
 )
 
 from openai import AsyncOpenAI
@@ -31,7 +48,7 @@ from openai.lib.streaming.chat._events import (
     RefusalDeltaEvent,
     RefusalDoneEvent,
 )
-from openai.types.chat import ChatCompletionMessageParam
+from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
 from openai.types.chat.chat_completion_assistant_message_param import (
     ChatCompletionAssistantMessageParam,
 )
@@ -57,13 +74,57 @@ from chat_cmpl_stream_handler.utils.tool_call import (  # noqa: F401
 if TYPE_CHECKING:
     from openai.lib.streaming.chat._events import ChatCompletionStreamEvent
 
-__version__: Final[Text] = "0.5.0"
 
+__version__: Final[Text] = "0.5.0"
 
 logger = logging.getLogger(__name__)
 
-
 ToolInvokerFn = Callable[[ChatCompletionMessageToolCall, Any], Awaitable[str]]
+
+
+def merge_tools_and_invokers(
+    tools: "Sequence[Union[Tool, ChatCompletionToolParam]] | None" = None,
+    tool_invokers: Dict[str, ToolInvokerFn] | None = None,
+    stream_tools: Iterable[ChatCompletionToolParam] | None = None,
+) -> Tuple[List[ChatCompletionToolParam], Dict[str, ToolInvokerFn]]:
+    """Merge tool sources into the primitive ``(schemas, invokers)`` pair.
+
+    Sources, applied in order (later wins for schemas; explicit
+    ``tool_invokers`` always wins for invokers):
+
+    1. ``stream_tools`` — raw schemas already in ``stream_kwargs["tools"]``.
+    2. ``tools`` — ``Tool`` objects and/or raw schemas.
+    3. ``tool_invokers`` — explicit name → callable overlay.
+
+    Raises ``ValueError`` if any schema name lacks a matching invoker.
+    """
+    schemas_by_name: Dict[str, ChatCompletionToolParam] = {}
+    invokers: Dict[str, ToolInvokerFn] = {}
+
+    for schema in stream_tools or ():
+        schemas_by_name[schema["function"]["name"]] = schema
+
+    for item in tools or ():
+        if isinstance(item, Tool):
+            param = item.tool_param
+            name = param["function"]["name"]
+            schemas_by_name[name] = param
+            invokers[name] = item.invoke
+        else:
+            schemas_by_name[item["function"]["name"]] = item
+
+    for name, fn in (tool_invokers or {}).items():
+        if name in invokers:
+            logger.warning(
+                f"tool_invokers[{name!r}] overrides Tool.invoke from `tools=`"
+            )
+        invokers[name] = fn
+
+    missing = [name for name in schemas_by_name if name not in invokers]
+    if missing:
+        raise ValueError(f"No invoker for tool(s): {missing}")
+
+    return list(schemas_by_name.values()), invokers
 
 
 async def stream_until_user_input(
@@ -72,6 +133,7 @@ async def stream_until_user_input(
     openai_client: AsyncOpenAI,
     *,
     stream_handler: "ChatCompletionStreamHandler[ResponseFormatT] | None" = None,
+    tools: "Sequence[Union[Tool, ChatCompletionToolParam]] | None" = None,
     tool_invokers: Dict[str, ToolInvokerFn] | None = None,
     stream_kwargs: Dict[Text, Any] | None = None,
     context: Any | None = None,
@@ -81,6 +143,15 @@ async def stream_until_user_input(
     ] = None,
     **kwargs,
 ) -> "StreamResult":
+    merged_stream_kwargs: Dict[Text, Any] = dict(stream_kwargs or {})
+    resolved_tools, resolved_invokers = merge_tools_and_invokers(
+        tools=tools,
+        tool_invokers=tool_invokers,
+        stream_tools=merged_stream_kwargs.pop("tools", None),
+    )
+    if resolved_tools:
+        merged_stream_kwargs["tools"] = resolved_tools
+
     current_messages = list(messages)
     usages: List["CompletionUsage"] = []
     active_stream_handler = stream_handler or ChatCompletionStreamHandler()
@@ -94,7 +165,7 @@ async def stream_until_user_input(
             stream=True,
             **{
                 k: v
-                for k, v in (stream_kwargs or {}).items()
+                for k, v in merged_stream_kwargs.items()
                 if k not in ("messages", "model", "stream")
             },
         )
@@ -145,7 +216,7 @@ async def stream_until_user_input(
 
         # 3. Execute tool calls, and add the results back to messages
         for tool_call in assistant_msg.tool_calls:
-            invoker = (tool_invokers or {}).get(tool_call.function.name)
+            invoker = resolved_invokers.get(tool_call.function.name)
 
             if invoker is None:
                 raise ValueError(f"No invoker for tool: {tool_call.function.name}")
@@ -166,6 +237,34 @@ async def stream_until_user_input(
     raise MaxIterationsReached(
         f"Reached max_iterations={max_iterations} without waiting for user input."
     )
+
+
+@runtime_checkable
+class Tool(Protocol):
+    """A self-contained tool: schema + invoker travel together.
+
+    Any object exposing ``tool_param`` and ``invoke`` qualifies — no base
+    class required. Pass instances via ``stream_until_user_input(tools=...)``.
+    """
+
+    tool_param: ChatCompletionToolParam
+
+    async def invoke(
+        self, tool_call: ChatCompletionMessageToolCall, context: Any
+    ) -> str: ...
+
+
+@dataclass(frozen=True)
+class FunctionTool(Tool):
+    """Trivial ``Tool`` implementation for users who don't want a subclass."""
+
+    tool_param: ChatCompletionToolParam
+    invoker: ToolInvokerFn
+
+    async def invoke(
+        self, tool_call: ChatCompletionMessageToolCall, context: Any
+    ) -> str:
+        return await self.invoker(tool_call, context)
 
 
 class StreamResult:
