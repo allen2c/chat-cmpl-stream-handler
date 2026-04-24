@@ -8,6 +8,7 @@ from openai.types.chat.chat_completion_message_tool_call import (
 )
 
 from chat_cmpl_stream_handler import (
+    FunctionTool,
     IterationCompleted,
     IterationStarted,
     RunCompleted,
@@ -69,6 +70,12 @@ async def fallback_tool(
     _tool_call: ChatCompletionMessageToolCall, _context: Any
 ) -> str:
     return "fallback ok"
+
+
+async def wrong_fallback_tool(
+    _tool_call: ChatCompletionMessageToolCall, _context: Any
+) -> str:
+    return "wrong fallback"
 
 
 @pytest.mark.asyncio
@@ -183,6 +190,28 @@ async def test_events_fallback_invoker(openai_client: AsyncOpenAI, openai_model:
     )
 
     assert _one(events, ToolCallCompleted).result.content == "fallback ok"
+
+
+@pytest.mark.asyncio
+async def test_events_fallback_does_not_override_function_tool(
+    openai_client: AsyncOpenAI,
+    openai_model: str,
+):
+    events = await _events(
+        messages=[
+            {
+                "role": "user",
+                "content": "Call get_weather once with city Tokyo, then answer.",
+            }
+        ],
+        model=openai_model,
+        openai_client=openai_client,
+        tools=[FunctionTool(tool_param=GET_WEATHER_TOOL, invoker=weather_result)],
+        stream_kwargs={"parallel_tool_calls": False},
+        fallback_invoker=lambda _name: wrong_fallback_tool,
+    )
+
+    assert _one(events, ToolCallCompleted).result.content == "weather:Tokyo"
 
 
 @pytest.mark.asyncio

@@ -235,6 +235,7 @@ async def stream_until_user_input_events(
         for tool_call in assistant_msg.tool_calls:
             invoker = resolved_invokers.get(tool_call.function.name)
             if invoker is None and fallback_invoker is not None:
+                # Defensive path for provider-returned names outside the schemas.
                 invoker = fallback_invoker(tool_call.function.name)
             if invoker is None:
                 yield RunFailed(
@@ -514,11 +515,18 @@ def _add_fallback_invokers(
         return tool_invokers
 
     invokers = dict(tool_invokers or {})
+    covered = set(invokers)
+    for item in tools or ():
+        if isinstance(item, Tool):
+            covered.add(item.tool_param["function"]["name"])
+
     for name in _tool_schema_names(tools=tools, stream_tools=stream_tools):
-        if name not in invokers:
-            invoker = fallback_invoker(name)
-            if invoker is not None:
-                invokers[name] = invoker
+        if name in covered:
+            continue
+        invoker = fallback_invoker(name)
+        if invoker is not None:
+            invokers[name] = invoker
+            covered.add(name)
 
     return invokers
 
