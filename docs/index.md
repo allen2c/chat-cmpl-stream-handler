@@ -101,6 +101,33 @@ class PrintingHandler(ChatCompletionStreamHandler):
         print(f"\n[calling] {event.name}({event.arguments})")
 ```
 
+If you want one async stream of everything that happens in the loop, use
+`stream_until_user_input_events`:
+
+```python
+from chat_cmpl_stream_handler import (
+    RunCompleted,
+    StreamEvent,
+    ToolCallCompleted,
+    stream_until_user_input_events,
+)
+
+
+async for event in stream_until_user_input_events(
+    messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
+    model="gpt-4.1-nano",
+    openai_client=client,
+    tool_invokers={"get_weather": get_weather},
+    stream_kwargs={"tools": [GET_WEATHER_TOOL]},
+):
+    if isinstance(event, StreamEvent) and event.event.type == "content.delta":
+        print(event.event.delta, end="")
+    elif isinstance(event, ToolCallCompleted):
+        print("tool result:", event.result.content)
+    elif isinstance(event, RunCompleted):
+        result = event.result
+```
+
 ### Building tools from MCP servers
 
 If you already expose capabilities through an MCP server, you can turn them into
@@ -195,33 +222,78 @@ async def stream_until_user_input(
     openai_client: AsyncOpenAI,
     *,
     stream_handler: ChatCompletionStreamHandler[ResponseFormatT] | None = None,
+    tools: Sequence[Tool | ChatCompletionToolParam] | None = None,
     tool_invokers: dict[str, ToolInvokerFn] | None = None,
     stream_kwargs: dict[str, Any] | None = None,
     context: Any | None = None,
     max_iterations: int = 10,
+    tool_call_output_callback: Callable[[ChatCompletionMessageFunctionToolCall, str], Awaitable[None]] | None = None,
+    fallback_invoker: Callable[[str], ToolInvokerFn | None] | None = None,
+    on_tool_error: Literal["emit", "raise", "abort"] = "emit",
 ) -> StreamResult
 ```
 
-Streams a completion, executes tool calls, feeds results back, repeats — until the model stops asking for tools. Raises `MaxIterationsReached` if you've somehow ended up in an infinite tool call loop (it happens).
+Streams a completion, executes tool calls, feeds results back, repeats — until the model stops asking for tools. Raises `MaxIterationsReached` if you've somehow ended up in an infinite tool call loop.
 
-| Parameter        | Description                                                                                                        |
-|------------------|--------------------------------------------------------------------------------------------------------------------|
-| `messages`       | Initial message list                                                                                               |
-| `model`          | Model name                                                                                                         |
-| `openai_client`  | `AsyncOpenAI` instance                                                                                             |
-| `stream_handler` | Receives stream events. Default: a no-op `ChatCompletionStreamHandler()`                                           |
-| `tool_invokers`  | `{"tool_name": async_fn}` — each fn takes `(tool_call: ChatCompletionMessageToolCall, context)` and returns `str`  |
-| `stream_kwargs`  | Passed directly to `chat.completions.create()` (e.g. `tools`, `stream_options`)                                    |
-| `context`        | Forwarded to every tool invoker as-is                                                                              |
-| `max_iterations` | Safety cap. Default: 10                                                                                            |
+| Parameter                   | Description                                                                                                           |
+|-----------------------------|-----------------------------------------------------------------------------------------------------------------------|
+| `messages`                  | Initial message list                                                                                                  |
+| `model`                     | Model name                                                                                                            |
+| `openai_client`             | `AsyncOpenAI` instance                                                                                                |
+| `stream_handler`            | Receives raw stream events. Default: a no-op `ChatCompletionStreamHandler()`                                          |
+| `tools`                     | Optional `Tool` objects or raw tool schemas                                                                           |
+| `tool_invokers`             | `{"tool_name": async_fn}`. Each function takes `(tool_call, context)` and returns `str` or `ToolResult`               |
+| `stream_kwargs`             | Passed directly to `chat.completions.create()`                                                                        |
+| `context`                   | Forwarded to every tool invoker as-is                                                                                 |
+| `max_iterations`            | Safety cap. Default: 10                                                                                               |
+| `tool_call_output_callback` | Receives each completed tool output as a plain string                                                                 |
+| `fallback_invoker`          | Resolves a tool invoker by name when the normal invoker map misses                                                    |
+| `on_tool_error`             | `"emit"` continues with a generic tool error, `"raise"` re-raises, `"abort"` stops and raises through the adapter     |
+
+### `stream_until_user_input_events`
+
+```python
+async def stream_until_user_input_events(
+    messages: Iterable[ChatCompletionMessageParam],
+    model: str | ChatModel,
+    openai_client: AsyncOpenAI,
+    *,
+    tools: Sequence[Tool | ChatCompletionToolParam] | None = None,
+    tool_invokers: dict[str, ToolInvokerFn] | None = None,
+    stream_kwargs: dict[str, Any] | None = None,
+    context: Any | None = None,
+    max_iterations: int = 10,
+    fallback_invoker: Callable[[str], ToolInvokerFn | None] | None = None,
+    on_tool_error: Literal["emit", "raise", "abort"] = "emit",
+) -> AsyncIterator[LifecycleEvent]
+```
+
+Yields lifecycle events as the loop runs:
+
+- `IterationStarted`
+- `StreamEvent`
+- `IterationCompleted`
+- `ToolCallStarted`
+- `ToolCallCompleted`
+- `ToolCallFailed`
+- `RunCompleted`
+- `RunFailed`
 
 ### `ToolInvokerFn`
 
 ```python
-ToolInvokerFn = Callable[[ChatCompletionMessageToolCall, Any], Awaitable[str]]
+ToolInvokerFn = Callable[[ChatCompletionMessageToolCall, Any], Awaitable[str | ToolResult]]
 ```
 
 Each tool invoker receives the full `ChatCompletionMessageToolCall` object from the OpenAI response. This gives you access to `tool_call.id`, `tool_call.function.name`, and `tool_call.function.arguments` — useful for tracing, logging, or emitting SSE events with the real tool call id.
+
+### `ToolResult`
+
+```python
+ToolResult(content: str, metadata: dict[str, Any])
+```
+
+Return `ToolResult` when the tool message should be a string but the caller also needs structured metadata in `ToolCallCompleted`. `metadata` defaults to an empty dict. The callback API only exposes `content`.
 
 ### `args_from_tool_call`
 
