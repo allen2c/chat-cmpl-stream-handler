@@ -17,20 +17,20 @@ from chat_cmpl_stream_handler.utils.pydantic_to_tool import (
 from tests.conftest import LLMProvider
 
 
-class BeginChainInput(BaseModel):
-    kickoff: Literal["start"]
+class BeginPipelineInput(BaseModel):
+    phase: Literal["go"]
 
 
-class UseAlphaInput(BaseModel):
-    alpha_token: str
+class UseStep1Input(BaseModel):
+    step1_ticket: str
 
 
-class UseBetaInput(BaseModel):
-    beta_token: str
+class UseStep2Input(BaseModel):
+    step2_ticket: str
 
 
-class UseGammaInput(BaseModel):
-    gamma_token: str
+class UseStep3Input(BaseModel):
+    step3_ticket: str
 
 
 def tool_output_of_next_step(tool_name: str, arguments: dict[str, str]) -> str:
@@ -46,28 +46,28 @@ def tool_output_of_next_step(tool_name: str, arguments: dict[str, str]) -> str:
     )
 
 
-async def begin_chain_invoker(arguments: BeginChainInput, context: Any) -> str:
-    assert context == "chain-test"
-    assert arguments.kickoff == "start"
-    return tool_output_of_next_step("use_alpha", {"alpha_token": "alpha-bridge"})
+async def begin_pipeline_invoker(arguments: BeginPipelineInput, context: Any) -> str:
+    assert context == "pipeline-test"
+    assert arguments.phase == "go"
+    return tool_output_of_next_step("use_step_1", {"step1_ticket": "slot-a-001"})
 
 
-async def use_alpha_invoker(arguments: UseAlphaInput, context: Any) -> str:
-    assert context == "chain-test"
-    assert arguments.alpha_token == "alpha-bridge"
-    return tool_output_of_next_step("use_beta", {"beta_token": "beta-lantern"})
+async def use_step_1_invoker(arguments: UseStep1Input, context: Any) -> str:
+    assert context == "pipeline-test"
+    assert arguments.step1_ticket == "slot-a-001"
+    return tool_output_of_next_step("use_step_2", {"step2_ticket": "slot-b-002"})
 
 
-async def use_beta_invoker(arguments: UseBetaInput, context: Any) -> str:
-    assert context == "chain-test"
-    assert arguments.beta_token == "beta-lantern"
-    return tool_output_of_next_step("use_gamma", {"gamma_token": "gamma-harbor"})
+async def use_step_2_invoker(arguments: UseStep2Input, context: Any) -> str:
+    assert context == "pipeline-test"
+    assert arguments.step2_ticket == "slot-b-002"
+    return tool_output_of_next_step("use_step_3", {"step3_ticket": "slot-c-003"})
 
 
-async def use_gamma_invoker(arguments: UseGammaInput, context: Any) -> str:
-    assert context == "chain-test"
-    assert arguments.gamma_token == "gamma-harbor"
-    return "CHAIN_COMPLETE"
+async def use_step_3_invoker(arguments: UseStep3Input, context: Any) -> str:
+    assert context == "pipeline-test"
+    assert arguments.step3_ticket == "slot-c-003"
+    return "PIPELINE_DONE"
 
 
 def extract_tool_call_names(
@@ -90,7 +90,7 @@ def extract_tool_call_names(
 
 
 @pytest.mark.asyncio
-async def test_stream_until_user_input_with_dependent_tools_chain(
+async def test_stream_until_user_input_with_dependent_tools_pipeline(
     llm_provider: LLMProvider,
 ):
     openai_client = llm_provider.client
@@ -99,28 +99,37 @@ async def test_stream_until_user_input_with_dependent_tools_chain(
     tools, tool_invokers = build_pydantic_tools_and_invokers(
         [
             PydanticToolConfig(
-                model=BeginChainInput,
-                name="begin_chain",
-                description="Start the chain with the kickoff value.",
-                invoker=begin_chain_invoker,
+                model=BeginPipelineInput,
+                name="begin_pipeline",
+                description="Start the ordered pipeline with the required phase value.",
+                invoker=begin_pipeline_invoker,
             ),
             PydanticToolConfig(
-                model=UseAlphaInput,
-                name="use_alpha",
-                description="Exchange the alpha token for the beta token.",
-                invoker=use_alpha_invoker,
+                model=UseStep1Input,
+                name="use_step_1",
+                description=(
+                    "Advance the pipeline using the step-1 ticket from the previous "
+                    "tool result."
+                ),
+                invoker=use_step_1_invoker,
             ),
             PydanticToolConfig(
-                model=UseBetaInput,
-                name="use_beta",
-                description="Exchange the beta token for the gamma token.",
-                invoker=use_beta_invoker,
+                model=UseStep2Input,
+                name="use_step_2",
+                description=(
+                    "Advance the pipeline using the step-2 ticket from the previous "
+                    "tool result."
+                ),
+                invoker=use_step_2_invoker,
             ),
             PydanticToolConfig(
-                model=UseGammaInput,
-                name="use_gamma",
-                description="Finish the chain with the gamma token.",
-                invoker=use_gamma_invoker,
+                model=UseStep3Input,
+                name="use_step_3",
+                description=(
+                    "Finish the pipeline using the step-3 ticket from the previous "
+                    "tool result."
+                ),
+                invoker=use_step_3_invoker,
             ),
         ]
     )
@@ -130,20 +139,20 @@ async def test_stream_until_user_input_with_dependent_tools_chain(
             {
                 "role": "system",
                 "content": (
-                    "You are executing a strict tool chain test. "
+                    "You are running a deterministic pipeline test. "
                     "Call exactly one tool at a time. "
                     "Never invent the next tool arguments. "
                     "Read each tool result and copy its `next_arguments` exactly "
                     "into the next tool call. "
-                    "When the final tool returns CHAIN_COMPLETE, answer with exactly "
-                    "`CHAIN_COMPLETE`."
+                    "When the final tool returns PIPELINE_DONE, answer with exactly "
+                    "`PIPELINE_DONE`."
                 ),
             },
             {
                 "role": "user",
                 "content": (
-                    "Start by calling `begin_chain` with "
-                    '{"kickoff":"start"} and finish the full chain.'
+                    "Begin by calling `begin_pipeline` with "
+                    '{"phase":"go"} and complete every step.'
                 ),
             },
         ],
@@ -155,7 +164,7 @@ async def test_stream_until_user_input_with_dependent_tools_chain(
             "tools": tools,
             "stream_options": {"include_usage": True},
         },
-        context="chain-test",
+        context="pipeline-test",
         max_iterations=6,
     )
 
@@ -165,12 +174,12 @@ async def test_stream_until_user_input_with_dependent_tools_chain(
     tool_call_names = extract_tool_call_names(input_list, model)
 
     assert tool_call_names == [
-        "begin_chain",
-        "use_alpha",
-        "use_beta",
-        "use_gamma",
+        "begin_pipeline",
+        "use_step_1",
+        "use_step_2",
+        "use_step_3",
     ]
     assert input_list[-1]["role"] == "assistant"
-    assert input_list[-1]["content"] == "CHAIN_COMPLETE"
+    assert input_list[-1]["content"] == "PIPELINE_DONE"
     assert len(result.usages) > 0
     assert all(u.total_tokens for u in result.usages)
