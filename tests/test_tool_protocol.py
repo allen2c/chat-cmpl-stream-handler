@@ -1,4 +1,4 @@
-"""Pure unit tests for the ``Tool`` protocol — no LLM, no I/O."""
+"""Pure unit tests for the Tool protocol."""
 
 from openai.types.chat import ChatCompletionToolParam
 
@@ -71,9 +71,7 @@ def test_missing_invoke_is_not_a_tool():
 
 
 def test_runtime_checkable_does_not_validate_signatures():
-    """``@runtime_checkable`` only checks attribute presence, not types or
-    async-ness. Documenting this so future readers don't expect deeper checks.
-    """
+    """Runtime protocol checks only verify attribute presence."""
 
     class SyncInvoke:
         tool_param = SCHEMA

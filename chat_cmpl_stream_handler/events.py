@@ -1,11 +1,7 @@
-"""Lifecycle events for ``stream_until_user_input_events``.
+"""Lifecycle event types for streaming runs.
 
-The async-generator API yields instances of :class:`LifecycleEvent` so
-consumers can drive SSE/streaming UIs with a single ``async for`` loop
-instead of juggling a callback handler plus a background task.
-
-All events are plain frozen dataclasses — dispatch via ``isinstance`` or
-``match``.
+The generator API yields these frozen dataclasses as a run progresses.
+Consumers can inspect the event type and fields directly.
 """
 
 from __future__ import annotations
@@ -30,13 +26,10 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ToolResult:
-    """Structured return type for ``Tool.invoke`` / tool invokers.
+    """Structured output from a tool invoker.
 
-    ``content`` is the string placed into the tool message returned to the
-    model. ``metadata`` is a free-form payload that rides along in
-    :class:`ToolCallCompleted` events — callers use it to carry
-    domain-specific objects (AFS models, MCP labels, etc.) through the
-    stream without stringifying them.
+    content is sent back as the tool message. metadata is kept on lifecycle
+    events for callers that need extra structured data.
     """
 
     content: str
@@ -45,7 +38,7 @@ class ToolResult:
 
 @dataclass(frozen=True)
 class IterationStarted:
-    """Emitted at the top of each tool-loop iteration, before the stream begins."""
+    """A tool-loop iteration is starting."""
 
     index: int
     messages: List[ChatCompletionMessageParam]
@@ -53,14 +46,14 @@ class IterationStarted:
 
 @dataclass(frozen=True)
 class StreamEvent:
-    """Wraps a raw OpenAI ``ChatCompletionStreamEvent`` (content.delta, tool_calls.*, etc.)."""  # noqa: E501
+    """A raw stream event was received."""
 
     event: "ChatCompletionStreamEvent"
 
 
 @dataclass(frozen=True)
 class ToolCallStarted:
-    """Emitted just before an invoker runs for a given tool call."""
+    """A tool invoker is about to run."""
 
     iteration: int
     tool_call: ChatCompletionMessageFunctionToolCall
@@ -68,7 +61,7 @@ class ToolCallStarted:
 
 @dataclass(frozen=True)
 class ToolCallCompleted:
-    """Emitted after a tool invoker returns (including the ``on_tool_error='emit'`` fallback)."""  # noqa: E501
+    """A tool invoker returned a result."""
 
     iteration: int
     tool_call: ChatCompletionMessageFunctionToolCall
@@ -77,7 +70,7 @@ class ToolCallCompleted:
 
 @dataclass(frozen=True)
 class ToolCallFailed:
-    """Emitted when an invoker raises. Always emitted before any error handling."""
+    """A tool invoker raised an exception."""
 
     iteration: int
     tool_call: ChatCompletionMessageFunctionToolCall
@@ -86,7 +79,7 @@ class ToolCallFailed:
 
 @dataclass(frozen=True)
 class IterationCompleted:
-    """Emitted after the model response for an iteration is fully received."""
+    """The model response for an iteration is complete."""
 
     index: int
     usage: CompletionUsage | None
@@ -95,14 +88,14 @@ class IterationCompleted:
 
 @dataclass(frozen=True)
 class RunCompleted:
-    """Terminal success event. No further events will be yielded after this."""
+    """The run completed successfully."""
 
     result: "StreamResult"
 
 
 @dataclass(frozen=True)
 class RunFailed:
-    """Terminal failure event. No further events will be yielded after this."""
+    """The run ended with an exception."""
 
     exception: BaseException
 

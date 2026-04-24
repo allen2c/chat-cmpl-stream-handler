@@ -1,21 +1,8 @@
-"""Streaming chat completion utilities with tool-call orchestration.
+"""Streaming chat completion helpers with tool-call orchestration.
 
-Public surface:
-
-* ``stream_until_user_input_events`` — async-generator primary API that
-  yields :class:`LifecycleEvent` instances (iteration, stream, tool-call,
-  completion). Preferred for consumers that want to drive SSE directly.
-* ``stream_until_user_input`` — callback-style wrapper that preserves the
-  pre-0.5 behaviour (runs a :class:`ChatCompletionStreamHandler` and
-  ``tool_call_output_callback`` and returns a :class:`StreamResult`).
-* ``Tool`` / ``FunctionTool`` — optional ergonomic packaging for
-  ``(schema, invoker)`` pairs.
-* ``merge_tools_and_invokers`` — merge tool sources into the primitive
-  ``(schemas, invokers)`` pair.
-* ``ChatCompletionStreamHandler`` / ``StreamResult`` /
-  ``MaxIterationsReached`` — observation, result, and error types.
-* ``ToolResult`` and lifecycle event classes — see
-  :mod:`chat_cmpl_stream_handler.events`.
+The generator API yields lifecycle events. The callback API keeps the older
+handler-based flow. Tools can be passed as raw schemas with invokers or as
+small objects that carry both together.
 """
 
 import json
@@ -78,27 +65,17 @@ from openai.types.completion_usage import CompletionUsage
 from openai.types.shared.chat_model import ChatModel
 
 from chat_cmpl_stream_handler.events import (  # noqa: F401
-    IterationCompleted as IterationCompleted,
+    IterationCompleted,
+    IterationStarted,
+    LifecycleEvent,
+    RunCompleted,
+    RunFailed,
+    StreamEvent,
+    ToolCallCompleted,
+    ToolCallFailed,
+    ToolCallStarted,
+    ToolResult,
 )
-from chat_cmpl_stream_handler.events import (  # noqa: F401
-    IterationStarted as IterationStarted,
-)
-from chat_cmpl_stream_handler.events import (  # noqa: F401
-    LifecycleEvent as LifecycleEvent,
-)
-from chat_cmpl_stream_handler.events import RunCompleted as RunCompleted  # noqa: F401
-from chat_cmpl_stream_handler.events import RunFailed as RunFailed  # noqa: F401
-from chat_cmpl_stream_handler.events import StreamEvent as StreamEvent  # noqa: F401
-from chat_cmpl_stream_handler.events import (  # noqa: F401
-    ToolCallCompleted as ToolCallCompleted,
-)
-from chat_cmpl_stream_handler.events import (  # noqa: F401
-    ToolCallFailed as ToolCallFailed,
-)
-from chat_cmpl_stream_handler.events import (  # noqa: F401
-    ToolCallStarted as ToolCallStarted,
-)
-from chat_cmpl_stream_handler.events import ToolResult as ToolResult  # noqa: F401
 from chat_cmpl_stream_handler.utils.tool_call import (  # noqa: F401
     args_from_tool_call as args_from_tool_call,
 )
@@ -126,16 +103,13 @@ def merge_tools_and_invokers(
     tool_invokers: Dict[str, ToolInvokerFn] | None = None,
     stream_tools: Iterable[ChatCompletionToolParam] | None = None,
 ) -> Tuple[List[ChatCompletionToolParam], Dict[str, ToolInvokerFn]]:
-    """Merge tool sources into the primitive ``(schemas, invokers)`` pair.
+    """Merge tool schemas and invokers.
 
-    Sources, applied in order (later wins for schemas; explicit
-    ``tool_invokers`` always wins for invokers):
+    Schemas are collected from stream tools first, then tools. Later schemas
+    with the same name replace earlier schemas. Explicit invokers replace
+    invokers from packaged tools.
 
-    1. ``stream_tools`` — raw schemas already in ``stream_kwargs["tools"]``.
-    2. ``tools`` — ``Tool`` objects and/or raw schemas.
-    3. ``tool_invokers`` — explicit name → callable overlay.
-
-    Raises ``ValueError`` if any schema name lacks a matching invoker.
+    Raises ValueError when any schema has no invoker.
     """
     schemas_by_name: Dict[str, ChatCompletionToolParam] = {}
     invokers: Dict[str, ToolInvokerFn] = {}
@@ -180,26 +154,16 @@ async def stream_until_user_input_events(
     on_tool_error: OnToolError = "emit",
     **kwargs,
 ) -> AsyncIterator["LifecycleEvent"]:
-    """Async-generator form of :func:`stream_until_user_input`.
+    """Run the stream loop and yield lifecycle events.
 
-    Yields :class:`LifecycleEvent` instances as the tool loop progresses:
+    Events mark iteration starts, raw stream events, completed model
+    responses, tool invocation starts and finishes, and terminal success or
+    failure.
 
-    * :class:`IterationStarted` at the top of each iteration,
-    * :class:`StreamEvent` wrapping each raw OpenAI stream event,
-    * :class:`IterationCompleted` once the model response is fully received,
-    * :class:`ToolCallStarted` / :class:`ToolCallCompleted` /
-      :class:`ToolCallFailed` around each invoker call,
-    * :class:`RunCompleted` (terminal success) or :class:`RunFailed`
-      (terminal failure).
-
-    ``on_tool_error`` controls invoker-exception handling:
-
-    * ``"emit"`` (default) — yield :class:`ToolCallFailed`, then synthesize
-      a generic error tool message and continue the loop. Matches legacy
-      invoker-swallows-exceptions behaviour.
-    * ``"raise"`` — yield :class:`ToolCallFailed`, then re-raise.
-    * ``"abort"`` — yield :class:`ToolCallFailed` and :class:`RunFailed`,
-      then return.
+    on_tool_error controls invoker failures. "emit" yields a failure event,
+    sends a generic tool error message, and continues. "raise" yields the
+    failure event and raises the original exception. "abort" yields the
+    failure event, then a terminal run failure.
     """
     _validate_on_tool_error(on_tool_error)
 
@@ -338,12 +302,11 @@ async def stream_until_user_input(
     on_tool_error: OnToolError = "emit",
     **kwargs,
 ) -> "StreamResult":
-    """Callback-style wrapper around :func:`stream_until_user_input_events`.
+    """Run the stream loop through the callback-style API.
 
-    Backwards compatible with pre-0.5 callers: runs the optional
-    ``stream_handler`` for each raw stream event and calls
-    ``tool_call_output_callback`` after each tool invocation, returning
-    the final :class:`StreamResult`.
+    Raw stream events are sent to the stream handler. Tool outputs are sent
+    to the optional tool callback as plain strings. The final stream result
+    is returned.
     """
     active_stream_handler = stream_handler or ChatCompletionStreamHandler()
 
@@ -374,14 +337,11 @@ async def stream_until_user_input(
 
 @runtime_checkable
 class Tool(Protocol):
-    """A self-contained tool: schema + invoker travel together.
+    """A tool schema paired with its invoker.
 
-    Any object exposing ``tool_param`` and ``invoke`` qualifies — no base
-    class required. Pass instances via ``stream_until_user_input(tools=...)``.
-    Invokers may return either a plain ``str`` (used directly as the tool
-    message content) or a :class:`ToolResult` (whose ``content`` is used
-    for the tool message and whose ``metadata`` rides in the
-    :class:`ToolCallCompleted` event).
+    Any object with tool_param and invoke can be used as a tool. Invokers may
+    return a string or ToolResult. ToolResult.content becomes the tool message
+    content, and ToolResult.metadata is available on lifecycle events.
     """
 
     tool_param: ChatCompletionToolParam
@@ -393,7 +353,7 @@ class Tool(Protocol):
 
 @dataclass(frozen=True)
 class FunctionTool(Tool):
-    """Trivial ``Tool`` implementation for users who don't want a subclass."""
+    """Small tool container for a schema and invoker function."""
 
     tool_param: ChatCompletionToolParam
     invoker: ToolInvokerFn
@@ -405,6 +365,8 @@ class FunctionTool(Tool):
 
 
 class StreamResult:
+    """Final message history and usage data for a completed stream loop."""
+
     def __init__(
         self,
         messages: List[ChatCompletionMessageParam],
@@ -421,8 +383,10 @@ class StreamResult:
 
 
 class ChatCompletionStreamHandler(Generic[ResponseFormatT]):
+    """Callback hooks for observing raw stream events."""
+
     async def handle(self, event: "ChatCompletionStreamEvent[ResponseFormatT]") -> None:
-        """Internal dispatcher — routes each stream event to the right hook."""
+        """Route a stream event to the matching hook."""
         await self.on_event(event)
 
         if event.type == "chunk":
@@ -506,7 +470,7 @@ class ChatCompletionStreamHandler(Generic[ResponseFormatT]):
 
 
 class MaxIterationsReached(Exception):
-    """Raised when stream_until_user_input exceeds the maximum iteration limit."""
+    """Raised when the tool loop reaches the iteration limit."""
 
 
 def _assistant_msg_to_param(assistant_msg: Any) -> ChatCompletionAssistantMessageParam:
