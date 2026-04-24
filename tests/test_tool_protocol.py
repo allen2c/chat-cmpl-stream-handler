@@ -2,7 +2,7 @@
 
 from openai.types.chat import ChatCompletionToolParam
 
-from chat_cmpl_stream_handler import FunctionTool, Tool
+from chat_cmpl_stream_handler import FunctionTool, Tool, ToolResult
 
 SCHEMA: ChatCompletionToolParam = {
     "type": "function",
@@ -14,9 +14,35 @@ async def _noop(_tc, _ctx) -> str:
     return "noop"
 
 
+async def _structured_noop(_tc, _ctx) -> ToolResult:
+    return ToolResult(content="noop", metadata={"source": "test"})
+
+
 def test_function_tool_is_a_tool():
     ft = FunctionTool(tool_param=SCHEMA, invoker=_noop)
     assert isinstance(ft, Tool)
+
+
+def test_function_tool_accepts_tool_result_invoker():
+    ft = FunctionTool(tool_param=SCHEMA, invoker=_structured_noop)
+    assert isinstance(ft, Tool)
+
+
+def test_tool_protocol_accepts_str_and_tool_result_return_types():
+    class StringTool:
+        tool_param = SCHEMA
+
+        async def invoke(self, _tc, _ctx) -> str:
+            return "ok"
+
+    class StructuredTool:
+        tool_param = SCHEMA
+
+        async def invoke(self, _tc, _ctx) -> ToolResult:
+            return ToolResult(content="ok")
+
+    assert isinstance(StringTool(), Tool)
+    assert isinstance(StructuredTool(), Tool)
 
 
 def test_duck_typed_object_is_a_tool():
