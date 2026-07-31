@@ -18,7 +18,7 @@ from chat_cmpl_stream_handler import (
     stream_until_user_input_events,
 )
 from chat_cmpl_stream_handler.utils.get_strict_json_schema import get_strict_json_schema
-from tests.conftest import as_dicts
+from tests.conftest import as_dicts, skip_if_out_of_credit
 
 GET_WEATHER_TOOL: ChatCompletionToolParam = {
     "type": "function",
@@ -71,23 +71,28 @@ def gemini_router() -> Router:
 @pytest.mark.asyncio
 async def test_litellm_router_runs_the_tool_loop(gemini_router: Router):
     """A Router deployment drives the same loop an AsyncOpenAI client does."""
-    tool_call_ids: list[str] = []
-    result: StreamResult | None = None
+    events = [
+        event
+        async for event in stream_until_user_input_events(
+            messages=[
+                {"role": "system", "content": "you are a concise assistant"},
+                {"role": "user", "content": "Weather in Tokyo?"},
+            ],
+            model="flash",
+            openai_client=gemini_router,
+            tool_invokers={"get_weather": get_weather_invoker},
+            stream_kwargs={"tools": [GET_WEATHER_TOOL]},
+        )
+    ]
+    # A provider failure lands here as RunFailed rather than raising, so the conftest hook
+    # never sees it — without this a depleted account reads as "the run did not complete".
+    skip_if_out_of_credit(events)
 
-    async for event in stream_until_user_input_events(
-        messages=[
-            {"role": "system", "content": "you are a concise assistant"},
-            {"role": "user", "content": "Weather in Tokyo?"},
-        ],
-        model="flash",
-        openai_client=gemini_router,
-        tool_invokers={"get_weather": get_weather_invoker},
-        stream_kwargs={"tools": [GET_WEATHER_TOOL]},
-    ):
-        if isinstance(event, ToolCallStarted):
-            tool_call_ids.append(event.tool_call.id)
-        elif isinstance(event, RunCompleted):
-            result = event.result
+    tool_call_ids = [event.tool_call.id for event in events if isinstance(event, ToolCallStarted)]
+    result: StreamResult | None = next(
+        (event.result for event in events if isinstance(event, RunCompleted)),
+        None,
+    )
 
     assert result is not None, "the run did not complete"
     messages = result.to_input_list()

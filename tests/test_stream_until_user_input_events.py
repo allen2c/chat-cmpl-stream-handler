@@ -21,6 +21,7 @@ from chat_cmpl_stream_handler import (
     args_from_tool_call,
     stream_until_user_input_events,
 )
+from tests.conftest import skip_if_out_of_credit
 
 GET_WEATHER_TOOL: ChatCompletionToolParam = {
     "type": "function",
@@ -218,7 +219,9 @@ async def test_events_missing_invoker_stays_strict(
 
 
 async def _events(**kwargs: Any) -> list[Any]:
-    return [event async for event in stream_until_user_input_events(**kwargs)]
+    events = [event async for event in stream_until_user_input_events(**kwargs)]
+    skip_if_out_of_credit(events)
+    return events
 
 
 def _one(events: list[Any], event_type: type) -> Any:

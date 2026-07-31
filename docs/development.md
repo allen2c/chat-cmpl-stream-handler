@@ -63,18 +63,36 @@ python -m pytest tests/test_events.py -q   # offline unit tests only
 
 Offline (no network, no keys): `test_events.py`, `test_merge_tools_and_invokers.py`,
 `test_tool_protocol.py`, `test_streamers.py`, `test_genai_streamer.py`,
-`test_public_api.py`, `test_stream_handler_hooks.py`. Everything else calls a live
-provider.
+`test_public_api.py`, `test_stream_handler_hooks.py`, `test_tool_timeout.py`,
+`test_out_of_credit.py`. Everything else calls a live provider.
 
 **Real providers test provider behaviour; a scripted streamer tests loop logic.** Anything
 about the loop itself — iteration limits, message history, error routing — belongs in an
 offline test built on `tests/scripted.py`, which implements `ChunkStreamer` by replaying
 canned chunks. Burning API calls to prove a `for` loop counts to ten is a bad trade.
 
-A missing key skips; so does an **HTTP 402** from any provider. A depleted account is a
-billing state no commit can fix, and failing on it leaves CI red until someone tops up —
-`pytest_runtest_call` in `tests/conftest.py` turns it into a skip. Rate limits (429) still
-fail on purpose: those say something about the code or the request.
+A missing key skips, and so does **an account that cannot pay**. That is a billing state
+no commit can fix; failing on it leaves CI red until someone tops up, and a permanently red
+CI is one nobody reads. A rate limit the account *could* pay for still fails on purpose.
+
+Telling the two apart needs the provider's words, not its status code: Gemini bills a
+project spend cap as **429 `RESOURCE_EXHAUSTED`**, and OpenAI reports being out of credit
+as a 429 too. `is_out_of_credit()` in `tests/conftest.py` matches a short, deliberately
+narrow list of phrases — `tests/test_out_of_credit.py` pins it against real response text
+from all three client paths, and against the rate limits and outages it must *not* swallow.
+Widen that list only with a real message in hand.
+
+Two entry points, because a provider failure takes two shapes:
+
+| Shape                              | Caught by                                    |
+|------------------------------------|----------------------------------------------|
+| The exception reaches the test      | `pytest_runtest_call`, automatically          |
+| The events API returns `RunFailed`  | `skip_if_out_of_credit(events)`, called by hand |
+
+The events API reports provider failures as a terminal `RunFailed` instead of raising, so
+nothing reaches the hook. A test that collects lifecycle events from a live provider has to
+pass them through `skip_if_out_of_credit` itself — otherwise a depleted account surfaces as
+whatever that test asserted next.
 
 The `llm_provider` fixture is parametrized over every entry in `PROVIDER_CONFIGS`, so one
 test function becomes one run per configured provider. Prefer `@pytest.mark.parametrize`
