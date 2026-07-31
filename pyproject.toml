@@ -1,11 +1,11 @@
 [project]
 authors = [{ name = "Allen Chou", email = "f1470891079@gmail.com" }]
-dependencies = ["openai (>=1)"]
+dependencies = ["litellm[caching,google] (>=1,<2)", "openai (>=1)"]
 description = "Chat Completion Stream Handler"
 license = { text = "MIT" }
 name = "chat-cmpl-stream-handler"
 readme = "README.md"
-requires-python = ">=3.11,<4"
+requires-python = ">=3.12,<3.15"
 version = "0.6.0"
 
 [project.urls]

@@ -63,7 +63,8 @@ from openai.types.chat.chat_completion_tool_message_param import (
 )
 from openai.types.completion_usage import CompletionUsage
 from openai.types.shared.chat_model import ChatModel
-
+from litellm.router import Router as LiteLLMRouter
+from google import genai
 from chat_cmpl_stream_handler.events import (  # noqa: F401
     IterationCompleted,
     IterationStarted,
@@ -137,7 +138,7 @@ def merge_tools_and_invokers(
 async def stream_until_user_input_events(
     messages: Iterable[ChatCompletionMessageParam],
     model: Union[str, ChatModel],
-    openai_client: AsyncOpenAI,
+    openai_client: AsyncOpenAI | LiteLLMRouter | genai.Client,
     *,
     tools: Optional[Sequence[Union["Tool", ChatCompletionToolParam]]] = None,
     tool_invokers: Optional[Dict[str, ToolInvokerFn]] = None,
@@ -264,7 +265,7 @@ async def stream_until_user_input_events(
 async def stream_until_user_input(
     messages: Iterable[ChatCompletionMessageParam],
     model: Union[str, ChatModel],
-    openai_client: AsyncOpenAI,
+    openai_client: AsyncOpenAI | LiteLLMRouter | genai.Client,
     *,
     stream_handler: Optional["ChatCompletionStreamHandler[ResponseFormatT]"] = None,
     tools: Optional[Sequence[Union["Tool", ChatCompletionToolParam]]] = None,
