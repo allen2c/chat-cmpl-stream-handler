@@ -42,7 +42,10 @@ codebase's `typing.Dict` / `Optional[...]` style).
 ## Type checking
 
 `pyright` runs in `standard` mode over `chat_cmpl_stream_handler` and `tests`, configured
-in `[tool.pyright]`. The tree is at **0 errors** and should stay there.
+in `[tool.pyright]`. The tree is at **0 errors** and should stay there — the `Check`
+workflow runs `make check` on every PR into `main`, so it is enforced, not just intended.
+`pyright` is a dev dependency for that reason; a locally-installed one (homebrew, npm) will
+shadow it and may be a different version than CI resolves.
 
 Fix the type, don't silence it. A few conventions that keep it that way:
 
@@ -79,6 +82,19 @@ minutes.
 
 Don't fan out parametrized cases against a rate-limited external MCP server; one
 representative integration case is enough.
+
+## CI
+
+Two workflows, both on push to `main` and on PRs into `main`:
+
+| Workflow | Runs         | Needs keys                        |
+|----------|--------------|-----------------------------------|
+| `Check`  | `make check` | No — so it is readable in isolation |
+| `Tests`  | `pytest -v`  | Yes, from repository secrets       |
+
+They are separate on purpose. `Tests` calls live providers and can go red for reasons that
+have nothing to do with the diff; `Check` never leaves the runner, so a red `Check` always
+means the code.
 
 ## Design docs
 
