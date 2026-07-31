@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from typing import Any, Iterable
 
 import pytest
 from openai import AsyncOpenAI
@@ -101,8 +102,10 @@ def llm_provider(request: pytest.FixtureRequest) -> LLMProvider:
     if not api_key:
         pytest.skip(f"{config.env_var} is not set")
 
-    client = AsyncOpenAI(
-        api_key=api_key,
-        **({"base_url": config.base_url} if config.base_url else {}),
-    )
+    client = AsyncOpenAI(api_key=api_key, base_url=config.base_url)
     return LLMProvider(name=name, client=client, model=config.default_model)
+
+
+def as_dicts(messages: Iterable[Any]) -> list[dict[str, Any]]:
+    """View message params as plain dicts for assertion-friendly indexing."""
+    return [dict(message) for message in messages]

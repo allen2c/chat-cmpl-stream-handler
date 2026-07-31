@@ -2,7 +2,7 @@ from typing import Any
 
 import pytest
 from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletionToolParam
+from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
 from openai.types.chat.chat_completion_message_tool_call import (
     ChatCompletionMessageToolCall,
 )
@@ -35,17 +35,13 @@ GET_WEATHER_TOOL: ChatCompletionToolParam = {
 }
 
 
-async def get_weather_invoker(
-    tool_call: ChatCompletionMessageToolCall, context: Any
-) -> str:
+async def get_weather_invoker(tool_call: ChatCompletionMessageToolCall, context: Any) -> str:
     assert context == "test"
     args = args_from_tool_call(tool_call)
     return f"The weather in {args['city']} is sunny and 25°C."
 
 
-async def get_weather_tool_result_invoker(
-    tool_call: ChatCompletionMessageToolCall, context: Any
-) -> ToolResult:
+async def get_weather_tool_result_invoker(tool_call: ChatCompletionMessageToolCall, context: Any) -> ToolResult:
     assert context == "test"
     args = args_from_tool_call(tool_call)
     return ToolResult(
@@ -54,21 +50,17 @@ async def get_weather_tool_result_invoker(
     )
 
 
-async def failing_weather_invoker(
-    _tool_call: ChatCompletionMessageToolCall, _context: Any
-) -> str:
+async def failing_weather_invoker(_tool_call: ChatCompletionMessageToolCall, _context: Any) -> str:
     raise RuntimeError("weather unavailable")
 
 
 @pytest.mark.parametrize("via", ["dict", "tool"])
 @pytest.mark.asyncio
-async def test_stream_until_user_input_with_tool_call(
-    llm_provider: LLMProvider, via: str
-):
+async def test_stream_until_user_input_with_tool_call(llm_provider: LLMProvider, via: str):
     openai_client = llm_provider.client
     model = llm_provider.model
 
-    messages = [{"role": "user", "content": "What's the weather in Tokyo?"}]
+    messages: list[ChatCompletionMessageParam] = [{"role": "user", "content": "What's the weather in Tokyo?"}]
 
     if via == "dict":
         extra_kwargs: dict[str, Any] = dict(
@@ -118,19 +110,14 @@ async def test_stream_until_user_input_callback_receives_tool_result_content(
 ):
     callback_outputs: list[str] = []
 
-    async def capture_output(
-        _tool_call: ChatCompletionMessageToolCall, output: str
-    ) -> None:
+    async def capture_output(_tool_call: ChatCompletionMessageToolCall, output: str) -> None:
         callback_outputs.append(output)
 
     result = await stream_until_user_input(
         messages=[
             {
                 "role": "user",
-                "content": (
-                    "Call get_weather once with city Tokyo, then answer using "
-                    "the tool result."
-                ),
+                "content": ("Call get_weather once with city Tokyo, then answer using " "the tool result."),
             }
         ],
         model=openai_model,

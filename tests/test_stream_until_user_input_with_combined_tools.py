@@ -22,6 +22,7 @@ from chat_cmpl_stream_handler.utils.pydantic_to_tool import (
     PydanticToolConfig,
     build_pydantic_tools_and_invokers,
 )
+from tests.conftest import as_dicts
 
 AWS_MCP_URL: str = "https://marketplace-mcp.us-east-1.api.aws/mcp"
 GET_WEATHER_TOOL: ChatCompletionToolParam = {
@@ -42,9 +43,7 @@ GET_WEATHER_TOOL: ChatCompletionToolParam = {
 }
 
 
-async def get_weather_invoker(
-    tool_call: ChatCompletionMessageToolCall, context: Any
-) -> str:
+async def get_weather_invoker(tool_call: ChatCompletionMessageToolCall, context: Any) -> str:
     assert context == "test"
     args = args_from_tool_call(tool_call)
     return f"The weather in {args['city']} is sunny and 25°C."
@@ -133,7 +132,7 @@ async def test_stream_until_user_input_with_combined_tools(
 
     assert isinstance(result, StreamResult)
 
-    input_list = result.to_input_list()
+    input_list = as_dicts(result.to_input_list())
     roles = [msg["role"] for msg in input_list]
     tool_call_names = _extract_tool_call_names(input_list)
 

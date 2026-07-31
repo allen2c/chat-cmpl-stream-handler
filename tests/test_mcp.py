@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 
 from chat_cmpl_stream_handler.utils.mcp import call_mcp_tool, list_mcp_tools
@@ -29,9 +31,9 @@ async def test_list_mcp_tools(server_label, filter_tool) -> None:
         func = tp["function"]
 
         assert tp["type"] == "function"
-        assert func["strict"] is True
+        assert func.get("strict") is True
 
-        params = func.get("parameters", {})
+        params: dict[str, Any] = dict(func.get("parameters") or {})
         if params.get("type") == "object" and params.get("properties"):
             assert params["additionalProperties"] is False
             assert "title" not in params

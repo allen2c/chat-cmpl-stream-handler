@@ -15,6 +15,7 @@ from chat_cmpl_stream_handler import (
     args_from_tool_call,
     stream_until_user_input,
 )
+from tests.conftest import as_dicts
 
 GET_WEATHER_TOOL = {
     "type": "function",
@@ -32,9 +33,7 @@ GET_WEATHER_TOOL = {
 }
 
 
-async def get_weather_invoker(
-    tool_call: ChatCompletionMessageToolCall, context: Any
-) -> str:
+async def get_weather_invoker(tool_call: ChatCompletionMessageToolCall, context: Any) -> str:
     args = args_from_tool_call(tool_call)
     return f"The weather in {args['city']} is sunny and 25°C."
 
@@ -58,7 +57,7 @@ async def test_anthropic_simple_text(anthropic_client: AsyncOpenAI):
     )
 
     assert isinstance(result, StreamResult)
-    msgs = result.to_input_list()
+    msgs = as_dicts(result.to_input_list())
     assert msgs[-1]["role"] == "assistant"
     assert msgs[-1]["content"]
 
@@ -79,7 +78,7 @@ async def test_anthropic_tool_call(anthropic_client: AsyncOpenAI):
     )
 
     assert isinstance(result, StreamResult)
-    msgs = result.to_input_list()
+    msgs = as_dicts(result.to_input_list())
     roles = [m["role"] for m in msgs]
 
     assert roles[0] == "user"

@@ -3,6 +3,7 @@
 from dataclasses import FrozenInstanceError
 
 import pytest
+from openai.lib.streaming.chat._events import RefusalDoneEvent
 from openai.types.chat.chat_completion_message_function_tool_call import (
     ChatCompletionMessageFunctionToolCall,
     Function,
@@ -35,7 +36,7 @@ def _tool_call() -> ChatCompletionMessageFunctionToolCall:
     [
         ToolResult(content="ok", metadata={"x": 1}),
         IterationStarted(index=0, messages=[]),
-        StreamEvent(event=object()),
+        StreamEvent(event=RefusalDoneEvent(type="refusal.done", refusal="no")),
         ToolCallStarted(iteration=0, tool_call=_tool_call()),
         ToolCallCompleted(
             iteration=0,

@@ -5,7 +5,7 @@ from chat_cmpl_stream_handler import (
     stream_until_user_input,
 )
 from chat_cmpl_stream_handler.utils.get_strict_json_schema import get_strict_json_schema
-from tests.conftest import LLMProvider
+from tests.conftest import LLMProvider, as_dicts
 
 
 class Step(BaseModel):
@@ -30,7 +30,7 @@ async def test_structured_output(llm_provider: LLMProvider):
         messages=[
             {
                 "role": "system",
-                "content": "You are a helpful math tutor. Guide the user through the solution step by step.",  # noqa: E501
+                "content": "You are a helpful math tutor. Guide the user through the solution step by step.",
             },
             {"role": "user", "content": "how can I solve 8x + 7 = -23"},
         ],
@@ -39,7 +39,7 @@ async def test_structured_output(llm_provider: LLMProvider):
         stream_kwargs={"response_format": get_strict_json_schema(MathReasoning)},
     )
 
-    messages = result.to_input_list()
+    messages = as_dicts(result.to_input_list())
     assistant_message = messages[-1]
     assert assistant_message["role"] == "assistant"
     assert assistant_message["content"] is not None
