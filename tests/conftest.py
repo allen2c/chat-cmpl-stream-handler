@@ -3,11 +3,27 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 import pytest
-from openai import AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI
 
 from chat_cmpl_stream_handler._patch_stream_tool_call_index import apply
 
 apply()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item: pytest.Item):
+    """Skip, rather than fail, when a provider account is out of credit.
+
+    HTTP 402 is a billing state, never a code defect — no commit can turn it green, so
+    letting it fail leaves CI permanently red. Rate limits (429) stay failures on
+    purpose: those say something about the code or the request.
+    """
+    try:
+        return (yield)
+    except APIStatusError as exc:
+        if exc.status_code != 402:
+            raise
+        pytest.skip(f"{item.name}: provider is out of credit (HTTP 402)")
 
 
 @dataclass(frozen=True)

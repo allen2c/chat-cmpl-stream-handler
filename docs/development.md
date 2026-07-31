@@ -67,6 +67,11 @@ about the loop itself — iteration limits, message history, error routing — b
 offline test built on `tests/scripted.py`, which implements `ChunkStreamer` by replaying
 canned chunks. Burning API calls to prove a `for` loop counts to ten is a bad trade.
 
+A missing key skips; so does an **HTTP 402** from any provider. A depleted account is a
+billing state no commit can fix, and failing on it leaves CI red until someone tops up —
+`pytest_runtest_call` in `tests/conftest.py` turns it into a skip. Rate limits (429) still
+fail on purpose: those say something about the code or the request.
+
 The `llm_provider` fixture is parametrized over every entry in `PROVIDER_CONFIGS`, so one
 test function becomes one run per configured provider. Prefer `@pytest.mark.parametrize`
 over near-duplicate test functions — a test file should be scannable in a couple of
