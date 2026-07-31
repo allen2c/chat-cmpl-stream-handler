@@ -6,6 +6,10 @@ Everything below is importable from the package root:
 from chat_cmpl_stream_handler import stream_until_user_input, ToolResult, ...
 ```
 
+Both entry points below take exactly the keywords listed. An unknown one raises
+`TypeError` — a typo such as `max_iteration=` is a loud error, not a silently dropped cap.
+Provider-bound options belong in `stream_kwargs`.
+
 ## `stream_until_user_input`
 
 ```python

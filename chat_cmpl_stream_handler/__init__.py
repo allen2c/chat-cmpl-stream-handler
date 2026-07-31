@@ -151,7 +151,6 @@ async def stream_until_user_input_events(
     max_iterations: int = 10,
     fallback_invoker: Optional[Callable[[str], Optional[ToolInvokerFn]]] = None,
     on_tool_error: OnToolError = "emit",
-    **kwargs,
 ) -> AsyncIterator["LifecycleEvent"]:
     """Run the stream loop and yield lifecycle events.
 
@@ -281,7 +280,6 @@ async def stream_until_user_input(
     tool_call_output_callback: Optional[Callable[[ChatCompletionMessageFunctionToolCall, str], Awaitable[None]]] = None,
     fallback_invoker: Optional[Callable[[str], Optional[ToolInvokerFn]]] = None,
     on_tool_error: OnToolError = "emit",
-    **kwargs,
 ) -> "StreamResult":
     """Run the stream loop through the callback-style API.
 
