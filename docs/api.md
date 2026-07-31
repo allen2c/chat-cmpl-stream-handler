@@ -11,8 +11,8 @@ from chat_cmpl_stream_handler import stream_until_user_input, ToolResult, ...
 ```python
 async def stream_until_user_input(
     messages: Iterable[ChatCompletionMessageParam],
-    model: str | ChatModel,
-    openai_client: AsyncOpenAI,
+    model: str,
+    openai_client: AsyncOpenAI | Router | genai.Client | ChunkStreamer,
     *,
     stream_handler: ChatCompletionStreamHandler[ResponseFormatT] | None = None,
     tools: Sequence[Tool | ChatCompletionToolParam] | None = None,
@@ -32,11 +32,11 @@ Streams a completion, executes tool calls, feeds results back, repeats — until
 |-----------------------------|-------------------------------------------------------------------------------------------------------------------|
 | `messages`                  | Initial message list                                                                                              |
 | `model`                     | Model name                                                                                                        |
-| `openai_client`             | `AsyncOpenAI` instance                                                                                            |
+| `openai_client`             | `AsyncOpenAI`, a litellm `Router`, a `genai.Client`, or any [`ChunkStreamer`](#chunkstreamer)                     |
 | `stream_handler`            | Receives raw stream events. Default: a no-op `ChatCompletionStreamHandler()`                                      |
 | `tools`                     | Optional `Tool` objects or raw tool schemas                                                                       |
 | `tool_invokers`             | `{"tool_name": async_fn}`. Each function takes `(tool_call, context)` and returns `str` or `ToolResult`           |
-| `stream_kwargs`             | Passed directly to `chat.completions.create()`                                                                    |
+| `stream_kwargs`             | Passed straight through to the provider request                                                                    |
 | `context`                   | Forwarded to every tool invoker as-is                                                                             |
 | `max_iterations`            | Safety cap. Default: 10                                                                                           |
 | `tool_call_output_callback` | Receives each completed tool output as a plain string                                                             |
@@ -48,8 +48,8 @@ Streams a completion, executes tool calls, feeds results back, repeats — until
 ```python
 async def stream_until_user_input_events(
     messages: Iterable[ChatCompletionMessageParam],
-    model: str | ChatModel,
-    openai_client: AsyncOpenAI,
+    model: str,
+    openai_client: AsyncOpenAI | Router | genai.Client | ChunkStreamer,
     *,
     tools: Sequence[Tool | ChatCompletionToolParam] | None = None,
     tool_invokers: dict[str, ToolInvokerFn] | None = None,
@@ -127,12 +127,43 @@ def merge_tools_and_invokers(
 
 The resolution step the loop runs internally, exposed for callers who want to inspect or pre-validate their tool wiring. Raises `ValueError` when a schema has no matching invoker.
 
+## `ChunkStreamer`
+
+```python
+@runtime_checkable
+class ChunkStreamer(Protocol):
+    def stream(
+        self,
+        *,
+        messages: list[ChatCompletionMessageParam],
+        model: str,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatCompletionChunk]: ...
+```
+
+The only thing the loop needs from a provider: a stream of OpenAI chunks. `openai_client=`
+accepts an `AsyncOpenAI`, a litellm `Router`, a `genai.Client`, or anything matching this protocol — pass a
+raw client and the loop wraps it for you.
+
+Implement it to add a provider the library doesn't know about, or to replay canned chunks
+in tests. `kwargs` carries OpenAI-named request options (`tools`, `response_format`, ...)
+straight through; translate shape, don't filter.
+
+```python
+class EchoStreamer:
+    async def stream(self, *, messages, model, **kwargs):
+        yield ChatCompletionChunk.model_validate({...})
+```
+
 ## `StreamResult`
 
 | Attribute / Method | Description                                                                 |
 |--------------------|-----------------------------------------------------------------------------|
 | `.to_input_list()` | Full message history as a JSON-serializable list, ready for the next round  |
 | `.usages`          | `list[CompletionUsage]` — one per iteration, so you can watch the bill grow |
+
+`to_input_list()` raises `TypeError` on anything that is not JSON-serializable. It used
+to stringify silently, which corrupted provider state instead of reporting it.
 
 ## `ChatCompletionStreamHandler`
 

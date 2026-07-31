@@ -215,8 +215,8 @@ The generated invoker validates the tool arguments with
 ```python
 async def stream_until_user_input(
     messages: Iterable[ChatCompletionMessageParam],
-    model: str | ChatModel,
-    openai_client: AsyncOpenAI,
+    model: str,
+    openai_client: AsyncOpenAI | Router | genai.Client | ChunkStreamer,
     *,
     stream_handler: ChatCompletionStreamHandler[ResponseFormatT] | None = None,
     tools: Sequence[Tool | ChatCompletionToolParam] | None = None,
@@ -236,11 +236,11 @@ Streams a completion, executes tool calls, feeds results back, repeats — until
 |-----------------------------|-----------------------------------------------------------------------------------------------------------------------|
 | `messages`                  | Initial message list                                                                                                  |
 | `model`                     | Model name                                                                                                            |
-| `openai_client`             | `AsyncOpenAI` instance                                                                                                |
+| `openai_client`             | `AsyncOpenAI`, a litellm `Router`, a `genai.Client`, or any `ChunkStreamer`                                           |
 | `stream_handler`            | Receives raw stream events. Default: a no-op `ChatCompletionStreamHandler()`                                          |
 | `tools`                     | Optional `Tool` objects or raw tool schemas                                                                           |
 | `tool_invokers`             | `{"tool_name": async_fn}`. Each function takes `(tool_call, context)` and returns `str` or `ToolResult`               |
-| `stream_kwargs`             | Passed directly to `chat.completions.create()`                                                                        |
+| `stream_kwargs`             | Passed straight through to the provider request                                                                        |
 | `context`                   | Forwarded to every tool invoker as-is                                                                                 |
 | `max_iterations`            | Safety cap. Default: 10                                                                                               |
 | `tool_call_output_callback` | Receives each completed tool output as a plain string                                                                 |
@@ -252,8 +252,8 @@ Streams a completion, executes tool calls, feeds results back, repeats — until
 ```python
 async def stream_until_user_input_events(
     messages: Iterable[ChatCompletionMessageParam],
-    model: str | ChatModel,
-    openai_client: AsyncOpenAI,
+    model: str,
+    openai_client: AsyncOpenAI | Router | genai.Client | ChunkStreamer,
     *,
     tools: Sequence[Tool | ChatCompletionToolParam] | None = None,
     tool_invokers: dict[str, ToolInvokerFn] | None = None,
@@ -300,6 +300,22 @@ def args_from_tool_call(tool_call: ChatCompletionMessageToolCall) -> dict[str, A
 
 Convenience helper that parses `tool_call.function.arguments` into a dictionary. Handles empty arguments gracefully.
 
+### `ChunkStreamer`
+
+```python
+@runtime_checkable
+class ChunkStreamer(Protocol):
+    def stream(
+        self,
+        *,
+        messages: list[ChatCompletionMessageParam],
+        model: str,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatCompletionChunk]: ...
+```
+
+The only thing the loop needs from a provider: a stream of OpenAI chunks. `openai_client=` accepts an `AsyncOpenAI`, a litellm `Router`, a `genai.Client`, or anything matching this protocol — pass a raw client and the loop wraps it for you. Implement it to add a provider the library doesn't know about, or to replay canned chunks in tests.
+
 ### `StreamResult`
 
 | Attribute / Method | Description                                                                 |
@@ -330,6 +346,18 @@ All methods are no-ops by default. Override only what you need.
 
 Works with any OpenAI-compatible endpoint. Some providers are more compatible than others.
 
+Two clients are not OpenAI-compatible and get an adapter instead — pass either straight to `openai_client=`:
+
+```python
+from google import genai
+from litellm.router import Router
+
+openai_client=Router(model_list=[...])   # model= is the deployment name
+openai_client=genai.Client(api_key=...)  # translated in both directions
+```
+
+Both support tool calls, streaming, structured output and Gemini 3 thought signatures. See [provider compatibility](https://allen2c.github.io/chat-cmpl-stream-handler/providers/) for the details that bite.
+
 ### Anthropic
 
 Anthropic exposes an OpenAI-compatible endpoint — no adapter needed. Use a plain `AsyncOpenAI` with the Anthropic base URL:
@@ -352,14 +380,9 @@ result = await stream_until_user_input(
 
 ### Gemini
 
-Gemini's streaming API sends `tool_call_delta.index = None`, which the OpenAI SDK does not appreciate. Apply the included patch once at startup:
+Gemini's streaming API sends `tool_call_delta.index = None`, which the OpenAI SDK does not appreciate. The loop normalises the index to its positional order before the SDK ever sees the chunk — nothing to do on your side.
 
-```python
-from chat_cmpl_stream_handler._patch_stream_tool_call_index import apply
-apply()  # safe to call multiple times
-```
-
-Put it at the top of `main.py`, or in `conftest.py` if you're testing. This is opt-in — the library won't silently monkey-patch anything on import.
+Before 0.6.0 this needed an opt-in monkey-patch (`_patch_stream_tool_call_index.apply()`). That function is now a no-op; delete the call.
 
 **Gemini 3 thought signatures:** Gemini 3 models require a `thought_signature` to be echoed back during multi-turn function calling. `stream_until_user_input` preserves these signatures automatically — no action needed on your side.
 
