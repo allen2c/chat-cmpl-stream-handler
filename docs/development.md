@@ -68,6 +68,20 @@ minutes.
 Don't fan out parametrized cases against a rate-limited external MCP server; one
 representative integration case is enough.
 
+## Design docs and work in flight
+
+`docs/` documents **shipped** behaviour only. Designs for unreleased work do not belong
+here — a doc describing an unimplemented API is a doc that lies.
+
+| Where          | What                                                    | In git |
+|----------------|---------------------------------------------------------|--------|
+| `docs/`        | Behaviour that exists in the released package            | yes    |
+| `tmp/`         | Specs and design notes for work not yet implemented      | no     |
+| `HANDOFF.md`   | Current branch state, decisions made, what's next        | no     |
+
+When a design ships, move the relevant parts of its spec into `docs/` and drop the
+scratch copy. If you are picking up an existing branch, read `HANDOFF.md` first.
+
 ## Releasing
 
 1. Bump `version` in `pyproject.toml` **and** `__version__` in `chat_cmpl_stream_handler/__init__.py` — they must match.

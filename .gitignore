@@ -4,8 +4,10 @@
 .env
 .env.production
 .envrc
+HANDOFF.md
 data
 poetry.lock
+tmp
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
