@@ -77,6 +77,7 @@ from chat_cmpl_stream_handler.events import (  # noqa: F401
     ToolResult,
 )
 from chat_cmpl_stream_handler.utils.tool_call import (  # noqa: F401
+    ToolInvokerFn as ToolInvokerFn,
     args_from_tool_call as args_from_tool_call,
 )
 
@@ -84,14 +85,9 @@ if TYPE_CHECKING:
     from openai.lib.streaming.chat._events import ChatCompletionStreamEvent
 
 
-__version__: Final[Text] = "0.5.0"
+__version__: Final[Text] = "0.6.0"
 
 logger = logging.getLogger(__name__)
-
-ToolInvokerFn = Callable[
-    [ChatCompletionMessageToolCall, Any],
-    Awaitable[Union[str, ToolResult]],
-]
 
 OnToolError = Literal["emit", "raise", "abort"]
 
@@ -128,9 +124,7 @@ def merge_tools_and_invokers(
 
     for name, fn in (tool_invokers or {}).items():
         if name in invokers:
-            logger.warning(
-                f"tool_invokers[{name!r}] overrides Tool.invoke from `tools=`"
-            )
+            logger.warning(f"tool_invokers[{name!r}] overrides Tool.invoke from `tools=`")
         invokers[name] = fn
 
     missing = [name for name in schemas_by_name if name not in invokers]
@@ -195,11 +189,7 @@ async def stream_until_user_input_events(
                 messages=current_messages,
                 model=model,
                 stream=True,
-                **{
-                    k: v
-                    for k, v in merged_stream_kwargs.items()
-                    if k not in ("messages", "model", "stream")
-                },
+                **{k: v for k, v in merged_stream_kwargs.items() if k not in ("messages", "model", "stream")},
             )
 
             async for chunk in stream:
@@ -213,9 +203,7 @@ async def stream_until_user_input_events(
 
         iteration_usage: Optional[CompletionUsage] = None
         if final.usage:
-            iteration_usage = CompletionUsage.model_validate_json(
-                final.usage.model_dump_json()
-            )
+            iteration_usage = CompletionUsage.model_validate_json(final.usage.model_dump_json())
             usages.append(iteration_usage)
 
         assistant_msg = final.choices[0].message
@@ -238,11 +226,7 @@ async def stream_until_user_input_events(
                 # Defensive path for provider-returned names outside the schemas.
                 invoker = fallback_invoker(tool_call.function.name)
             if invoker is None:
-                yield RunFailed(
-                    exception=ValueError(
-                        f"No invoker for tool: {tool_call.function.name}"
-                    )
-                )
+                yield RunFailed(exception=ValueError(f"No invoker for tool: {tool_call.function.name}"))
                 return
 
             yield ToolCallStarted(iteration=index, tool_call=tool_call)
@@ -250,9 +234,7 @@ async def stream_until_user_input_events(
             try:
                 raw_output = await invoker(tool_call, context)
             except Exception as exc:
-                yield ToolCallFailed(
-                    iteration=index, tool_call=tool_call, exception=exc
-                )
+                yield ToolCallFailed(iteration=index, tool_call=tool_call, exception=exc)
                 if on_tool_error == "raise":
                     raise
                 if on_tool_error == "abort":
@@ -263,11 +245,7 @@ async def stream_until_user_input_events(
                     metadata={"error": repr(exc)},
                 )
             else:
-                result = (
-                    raw_output
-                    if isinstance(raw_output, ToolResult)
-                    else ToolResult(content=str(raw_output))
-                )
+                result = raw_output if isinstance(raw_output, ToolResult) else ToolResult(content=str(raw_output))
 
             current_messages.append(
                 ChatCompletionToolMessageParam(
@@ -279,9 +257,7 @@ async def stream_until_user_input_events(
             yield ToolCallCompleted(iteration=index, tool_call=tool_call, result=result)
 
     yield RunFailed(
-        exception=MaxIterationsReached(
-            f"Reached max_iterations={max_iterations} without waiting for user input."
-        )
+        exception=MaxIterationsReached(f"Reached max_iterations={max_iterations} without waiting for user input.")
     )
 
 
@@ -296,9 +272,7 @@ async def stream_until_user_input(
     stream_kwargs: Optional[Dict[Text, Any]] = None,
     context: Optional[Any] = None,
     max_iterations: int = 10,
-    tool_call_output_callback: Optional[
-        Callable[[ChatCompletionMessageFunctionToolCall, str], Awaitable[None]]
-    ] = None,
+    tool_call_output_callback: Optional[Callable[[ChatCompletionMessageFunctionToolCall, str], Awaitable[None]]] = None,
     fallback_invoker: Optional[Callable[[str], Optional[ToolInvokerFn]]] = None,
     on_tool_error: OnToolError = "emit",
     **kwargs,
@@ -347,9 +321,7 @@ class Tool(Protocol):
 
     tool_param: ChatCompletionToolParam
 
-    async def invoke(
-        self, tool_call: ChatCompletionMessageToolCall, context: Any
-    ) -> Union[str, ToolResult]: ...
+    async def invoke(self, tool_call: ChatCompletionMessageToolCall, context: Any) -> Union[str, ToolResult]: ...
 
 
 @dataclass(frozen=True)
@@ -359,9 +331,7 @@ class FunctionTool(Tool):
     tool_param: ChatCompletionToolParam
     invoker: ToolInvokerFn
 
-    async def invoke(
-        self, tool_call: ChatCompletionMessageToolCall, context: Any
-    ) -> Union[str, ToolResult]:
+    async def invoke(self, tool_call: ChatCompletionMessageToolCall, context: Any) -> Union[str, ToolResult]:
         return await self.invoker(tool_call, context)
 
 
@@ -415,9 +385,7 @@ class ChatCompletionStreamHandler(Generic[ResponseFormatT]):
         else:
             logger.warning(f"Unknown event type: {event.type}")
 
-    async def on_event(
-        self, event: "ChatCompletionStreamEvent[ResponseFormatT]"
-    ) -> None:
+    async def on_event(self, event: "ChatCompletionStreamEvent[ResponseFormatT]") -> None:
         """Called for every stream event before more specific hooks."""
         pass
 
@@ -441,15 +409,11 @@ class ChatCompletionStreamHandler(Generic[ResponseFormatT]):
         """Called once when the full refusal string is complete."""
         pass
 
-    async def on_tool_calls_function_arguments_delta(
-        self, event: FunctionToolCallArgumentsDeltaEvent
-    ) -> None:
+    async def on_tool_calls_function_arguments_delta(self, event: FunctionToolCallArgumentsDeltaEvent) -> None:
         """Called for each incremental JSON fragment of a tool-call's arguments."""
         pass
 
-    async def on_tool_calls_function_arguments_done(
-        self, event: FunctionToolCallArgumentsDoneEvent
-    ) -> None:
+    async def on_tool_calls_function_arguments_done(self, event: FunctionToolCallArgumentsDoneEvent) -> None:
         """Called once when a tool call's full argument JSON is available."""
         pass
 

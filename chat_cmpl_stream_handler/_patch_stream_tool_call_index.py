@@ -56,6 +56,4 @@ def apply() -> None:
         return
     ChatCompletionStreamState.handle_chunk = _patched_handle_chunk
     _PATCHED = True
-    logger.debug(
-        "Patched ChatCompletionStreamState.handle_chunk" " for None tool_call index"
-    )
+    logger.debug("Patched ChatCompletionStreamState.handle_chunk for None tool_call index")

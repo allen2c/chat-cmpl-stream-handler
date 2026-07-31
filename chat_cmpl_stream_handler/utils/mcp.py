@@ -4,8 +4,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import (
     Any,
-    AsyncIterator,
-    Awaitable,
+    AsyncGenerator,
     Callable,
     Dict,
     List,
@@ -26,6 +25,8 @@ from openai.types.chat.chat_completion_message_tool_call import (
 )
 from openai.types.shared_params import FunctionDefinition
 
+from chat_cmpl_stream_handler.utils.tool_call import ToolInvokerFn
+
 logger: logging.Logger = logging.getLogger(__name__)
 
 _COMMON_SSE_PATHS: Sequence[str] = (
@@ -38,7 +39,6 @@ _COMMON_SSE_PATHS: Sequence[str] = (
 
 _TransportType = Text  # "sse" | "streamable_http"
 ToolFilterFn = Callable[[ToolParam], bool]
-ToolInvokerFn = Callable[[ChatCompletionMessageToolCall, Any], Awaitable[str]]
 
 _endpoint_cache: Dict[str, Tuple[str, _TransportType]] = {}
 
@@ -92,8 +92,9 @@ async def call_mcp_tool(
 
         parts: List[str] = []
         for block in result.content:
-            if hasattr(block, "text"):
-                parts.append(block.text)
+            text = getattr(block, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
             else:
                 parts.append(json.dumps(block.model_dump(), default=str))
         return "\n".join(parts)
@@ -124,9 +125,7 @@ async def list_mcp_tools(
 
     label_prefix: str = f"{server_label}__" if server_label else ""
 
-    tool_params: List[ToolParam] = [
-        _mcp_tool_to_tool_param(t, label_prefix=label_prefix) for t in mcp_tools
-    ]
+    tool_params: List[ToolParam] = [_mcp_tool_to_tool_param(t, label_prefix=label_prefix) for t in mcp_tools]
 
     return [tp for tp in tool_params if filter_tool(tp)]
 
@@ -195,16 +194,14 @@ def _sanitize_schema_for_strict(schema: Dict[str, object]) -> Dict[str, object]:
         if isinstance(value, dict):
             result[key] = _sanitize_schema_for_strict(value)
         elif isinstance(value, list):
-            result[key] = [
-                _sanitize_schema_for_strict(item) if isinstance(item, dict) else item
-                for item in value
-            ]
+            result[key] = [_sanitize_schema_for_strict(item) if isinstance(item, dict) else item for item in value]
         else:
             result[key] = value
 
-    if result.get("type") == "object" and "properties" in result:
+    properties = result.get("properties")
+    if result.get("type") == "object" and isinstance(properties, dict):
         result["additionalProperties"] = False
-        prop_names: List[str] = list(result["properties"].keys())
+        prop_names: List[str] = list(properties.keys())
         if prop_names:
             result["required"] = prop_names
 
@@ -285,7 +282,7 @@ async def _get_mcp_session(
     *,
     extra_headers: Optional[Dict[str, str]] = None,
     session: Optional[ClientSession] = None,
-) -> AsyncIterator[ClientSession]:
+) -> AsyncGenerator[ClientSession, None]:
     """Yield an initialized MCP session.
 
     If *session* is provided, it must already be initialized and is
@@ -316,7 +313,8 @@ async def _get_mcp_session(
 
         except* httpx.HTTPStatusError as eg:
             for exc in eg.exceptions:
-                logger.debug("HTTP %s at %s", exc.response.status_code, endpoint)
+                if isinstance(exc, httpx.HTTPStatusError):
+                    logger.debug("HTTP %s at %s", exc.response.status_code, endpoint)
 
         except* Exception as eg:
             for exc in eg.exceptions:
@@ -327,10 +325,7 @@ async def _get_mcp_session(
                     str(exc).splitlines()[0] if str(exc) else "no details",
                 )
 
-    raise ConnectionError(
-        f"Failed to establish MCP connection to {base_url} "
-        f"(tried transports: streamable_http, sse)"
-    )
+    raise ConnectionError(f"Failed to establish MCP connection to {base_url} (tried transports: streamable_http, sse)")
 
 
 def _connection_candidates(base_url: str) -> List[Tuple[str, _TransportType]]:
@@ -354,7 +349,7 @@ async def _mcp_transport(
     endpoint: str,
     transport: _TransportType,
     extra_headers: Optional[Dict[str, str]] = None,
-) -> AsyncIterator[Tuple[Any, Any]]:
+) -> AsyncGenerator[Tuple[Any, Any], None]:
     """Open the right MCP transport and yield ``(read, write)``."""
     if transport == "streamable_http":
         kwargs: Dict[str, Any] = {}
