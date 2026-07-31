@@ -6,7 +6,7 @@
 make install   # poetry install --all-extras --all-groups
 ```
 
-Python 3.11+ (`requires-python = ">=3.11,<4"`).
+Python 3.12+ (`requires-python = ">=3.12"`).
 
 Copy `.env.example` to `.env` and fill in whichever provider keys you have. Missing keys
 make the matching tests skip, not fail.
@@ -28,7 +28,7 @@ Line length is **120** across the whole toolchain. Four tools, one number:
 | Tool   | Config                                 | Role                                                                 |
 |--------|----------------------------------------|----------------------------------------------------------------------|
 | isort  | `[tool.isort]` in `pyproject.toml`     | Import order (`profile = "black"`, `combine_as_imports = true`)      |
-| black  | `[tool.black]` in `pyproject.toml`     | Formatting (`target-version = ["py311"]`)                            |
+| black  | `[tool.black]` in `pyproject.toml`     | Formatting (`target-version = ["py312"]`)                            |
 | ruff   | `[tool.ruff.lint]` in `pyproject.toml` | Linting — `B`, `E`, `F`, `W`; `E203` ignored for black compatibility |
 | flake8 | `.flake8`                              | Editor-side linting only; not installed as a dev dependency          |
 
@@ -49,6 +49,7 @@ Fix the type, don't silence it. A few conventions that keep it that way:
 - `ToolInvokerFn` is defined once in `chat_cmpl_stream_handler/utils/tool_call.py` and imported everywhere else. Redefining a structurally-identical alias per module makes `dict[str, ToolInvokerFn]` values incompatible across module boundaries — `Dict` is invariant.
 - `StreamResult.to_input_list()` is typed `list[ChatCompletionMessageParam]` so its output can be fed straight back into `messages=`. Indexing optional keys like `["content"]` on that union is a type error by design; tests use the `as_dicts()` helper in `tests/conftest.py` to get a plain-dict view instead.
 - `PydanticToolConfig` is generic over its model, so an invoker's first parameter is checked against the concrete model type.
+- The `ChunkStreamer` protocol returns `AsyncIterator`, but the adapters that implement it are annotated `AsyncGenerator`. That is what makes `.aclose()` type-check where it is called; the protocol stays at the loosest contract an implementation has to meet.
 
 ## Testing
 
@@ -58,7 +59,13 @@ python -m pytest tests/test_events.py -q   # offline unit tests only
 ```
 
 Offline (no network, no keys): `test_events.py`, `test_merge_tools_and_invokers.py`,
-`test_tool_protocol.py`. Everything else calls a live provider.
+`test_tool_protocol.py`, `test_streamers.py`, `test_genai_streamer.py`. Everything else
+calls a live provider.
+
+**Real providers test provider behaviour; a scripted streamer tests loop logic.** Anything
+about the loop itself — iteration limits, message history, error routing — belongs in an
+offline test built on `tests/scripted.py`, which implements `ChunkStreamer` by replaying
+canned chunks. Burning API calls to prove a `for` loop counts to ten is a bad trade.
 
 The `llm_provider` fixture is parametrized over every entry in `PROVIDER_CONFIGS`, so one
 test function becomes one run per configured provider. Prefer `@pytest.mark.parametrize`
@@ -68,19 +75,12 @@ minutes.
 Don't fan out parametrized cases against a rate-limited external MCP server; one
 representative integration case is enough.
 
-## Design docs and work in flight
+## Design docs
 
-`docs/` documents **shipped** behaviour only. Designs for unreleased work do not belong
-here — a doc describing an unimplemented API is a doc that lies.
-
-| Where          | What                                                    | In git |
-|----------------|---------------------------------------------------------|--------|
-| `docs/`        | Behaviour that exists in the released package            | yes    |
-| `tmp/`         | Specs and design notes for work not yet implemented      | no     |
-| `HANDOFF.md`   | Current branch state, decisions made, what's next        | no     |
-
-When a design ships, move the relevant parts of its spec into `docs/` and drop the
-scratch copy. If you are picking up an existing branch, read `HANDOFF.md` first.
+`docs/` documents **shipped** behaviour only — behaviour that exists in the released
+package. A doc describing an unimplemented API is a doc that lies, so keep design notes and
+in-flight state out of the repo entirely. When a design ships, that is when it earns a page
+here.
 
 ## Releasing
 

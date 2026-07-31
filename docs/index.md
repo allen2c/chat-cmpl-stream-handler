@@ -24,7 +24,7 @@ That's it. No magic. No framework. Just the loop.
 pip install chat-cmpl-stream-handler
 ```
 
-Requires Python 3.11+.
+Requires Python 3.12+.
 
 ## Quick Start
 
@@ -79,6 +79,24 @@ async def main():
 
 asyncio.run(main())
 ```
+
+## Not just OpenAI
+
+`openai_client=` takes three kinds of client. Two of them are not OpenAI-compatible
+endpoints — the loop adapts them:
+
+```python
+from google import genai
+from litellm.router import Router
+
+openai_client=AsyncOpenAI(api_key="...")        # or any compatible base_url
+openai_client=Router(model_list=[...])          # model= is the deployment name
+openai_client=genai.Client(api_key="...")       # translated in both directions
+```
+
+Tool calls, streaming, structured output and Gemini 3 thought signatures work on all
+three. Bring a fourth by implementing [`ChunkStreamer`](api.md#chunkstreamer) — it is one
+method, and the loop needs nothing else from a provider.
 
 ## Two ways to observe the loop
 
@@ -141,7 +159,7 @@ async for event in stream_until_user_input_events(
 
 - [API Reference](api.md) — every public function, type, and hook
 - [Building Tools](tools.md) — MCP servers and Pydantic models as tools
-- [Provider Compatibility](providers.md) — Anthropic and Gemini quirks
+- [Provider Compatibility](providers.md) — litellm, native genai, and per-provider quirks
 - [Development](development.md) — toolchain and conventions for contributors
 
 ## License
