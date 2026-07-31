@@ -62,8 +62,9 @@ python -m pytest tests/test_events.py -q   # offline unit tests only
 ```
 
 Offline (no network, no keys): `test_events.py`, `test_merge_tools_and_invokers.py`,
-`test_tool_protocol.py`, `test_streamers.py`, `test_genai_streamer.py`. Everything else
-calls a live provider.
+`test_tool_protocol.py`, `test_streamers.py`, `test_genai_streamer.py`,
+`test_public_api.py`, `test_stream_handler_hooks.py`. Everything else calls a live
+provider.
 
 **Real providers test provider behaviour; a scripted streamer tests loop logic.** Anything
 about the loop itself — iteration limits, message history, error routing — belongs in an

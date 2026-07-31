@@ -62,14 +62,30 @@ def tool_call_turn(name: str, arguments: str = "{}", *, call_id: str = "call_1")
     ]
 
 
-def chunk(delta: Dict[str, Any], *, finish_reason: Optional[str] = None) -> ChatCompletionChunk:
-    """Build one chunk from a raw delta, the way a provider would send it."""
+def chunk(
+    delta: Dict[str, Any],
+    *,
+    logprobs: Optional[Dict[str, Any]] = None,
+    finish_reason: Optional[str] = None,
+) -> ChatCompletionChunk:
+    """Build one chunk from a raw delta, the way a provider would send it.
+
+    ``logprobs`` sits beside the delta on the choice, not inside it — that is where the
+    OpenAI SDK's accumulator looks for it.
+    """
     return ChatCompletionChunk.model_validate(
         {
             "id": "scripted",
             "created": 0,
             "model": "scripted",
             "object": "chat.completion.chunk",
-            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": delta,
+                    "logprobs": logprobs,
+                    "finish_reason": finish_reason,
+                }
+            ],
         }
     )
