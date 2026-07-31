@@ -1,12 +1,16 @@
 [project]
 authors = [{ name = "Allen Chou", email = "f1470891079@gmail.com" }]
-dependencies = ["openai (>=1)"]
+dependencies = [
+  "google-genai (>=1.37)",
+  "litellm[caching,google] (>=1,<2)",
+  "openai (>=1)",
+]
 description = "Chat Completion Stream Handler"
 license = { text = "MIT" }
 name = "chat-cmpl-stream-handler"
 readme = "README.md"
-requires-python = ">=3.11,<4"
-version = "0.5.0"
+requires-python = ">=3.12,<4"
+version = "0.6.0"
 
 [project.urls]
 Homepage = "https://github.com/allen2c/chat-cmpl-stream-handler"
@@ -24,23 +28,39 @@ black = { extras = ["jupyter"], version = "*" }
 isort = "*"
 mkdocs-material = "*"
 openai-agents = "*"
+poetry = ">=2.4"
 poetry-plugin-export = "*"
+pyright = "*"
 pytest = "*"
 pytest-asyncio = "*"
 pytest-cov = "*"
 pytest-env = "*"
 pytest-xdist = "*"
 rich = "*"
-rich-color-support = "*"
+ruff = "*"
 setuptools = "*"
 twine = "*"
 
+[tool.black]
+line-length = 120
+target-version = ["py312"]
+
 [tool.isort]
+combine_as_imports = true
+line_length = 120
 profile = "black"
 
-[tool.flake8]
-ignore = ["E203", "E704", "W503"]
-max-line-length = 88
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+ignore = ["E203"]
+select = ["B", "E", "F", "W"]
+
+[tool.pyright]
+include = ["chat_cmpl_stream_handler", "tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
 
 [tool.pytest.ini_options]
 env = ["ENVIRONMENT=test", "PYTEST_IS_RUNNING=true"]

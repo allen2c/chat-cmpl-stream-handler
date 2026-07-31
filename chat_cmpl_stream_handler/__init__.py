@@ -5,6 +5,7 @@ handler-based flow. Tools can be passed as raw schemas with invokers or as
 small objects that carry both together.
 """
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -29,6 +30,8 @@ from typing import (
     runtime_checkable,
 )
 
+from google import genai
+from litellm.router import Router as LiteLLMRouter
 from openai import AsyncOpenAI
 from openai.lib._parsing._completions import ResponseFormatT
 from openai.lib.streaming.chat import ChatCompletionStreamState
@@ -62,7 +65,6 @@ from openai.types.chat.chat_completion_tool_message_param import (
     ChatCompletionToolMessageParam,
 )
 from openai.types.completion_usage import CompletionUsage
-from openai.types.shared.chat_model import ChatModel
 
 from chat_cmpl_stream_handler.events import (  # noqa: F401
     IterationCompleted,
@@ -76,7 +78,12 @@ from chat_cmpl_stream_handler.events import (  # noqa: F401
     ToolCallStarted,
     ToolResult,
 )
+from chat_cmpl_stream_handler.streamers import (
+    ChunkStreamer as ChunkStreamer,
+    as_streamer as _as_streamer,
+)
 from chat_cmpl_stream_handler.utils.tool_call import (  # noqa: F401
+    ToolInvokerFn as ToolInvokerFn,
     args_from_tool_call as args_from_tool_call,
 )
 
@@ -84,14 +91,9 @@ if TYPE_CHECKING:
     from openai.lib.streaming.chat._events import ChatCompletionStreamEvent
 
 
-__version__: Final[Text] = "0.5.0"
+__version__: Final[Text] = "0.6.0"
 
 logger = logging.getLogger(__name__)
-
-ToolInvokerFn = Callable[
-    [ChatCompletionMessageToolCall, Any],
-    Awaitable[Union[str, ToolResult]],
-]
 
 OnToolError = Literal["emit", "raise", "abort"]
 
@@ -128,9 +130,7 @@ def merge_tools_and_invokers(
 
     for name, fn in (tool_invokers or {}).items():
         if name in invokers:
-            logger.warning(
-                f"tool_invokers[{name!r}] overrides Tool.invoke from `tools=`"
-            )
+            logger.warning(f"tool_invokers[{name!r}] overrides Tool.invoke from `tools=`")
         invokers[name] = fn
 
     missing = [name for name in schemas_by_name if name not in invokers]
@@ -142,8 +142,8 @@ def merge_tools_and_invokers(
 
 async def stream_until_user_input_events(
     messages: Iterable[ChatCompletionMessageParam],
-    model: Union[str, ChatModel],
-    openai_client: AsyncOpenAI,
+    model: str,
+    openai_client: AsyncOpenAI | LiteLLMRouter | genai.Client | ChunkStreamer,
     *,
     tools: Optional[Sequence[Union["Tool", ChatCompletionToolParam]]] = None,
     tool_invokers: Optional[Dict[str, ToolInvokerFn]] = None,
@@ -152,7 +152,7 @@ async def stream_until_user_input_events(
     max_iterations: int = 10,
     fallback_invoker: Optional[Callable[[str], Optional[ToolInvokerFn]]] = None,
     on_tool_error: OnToolError = "emit",
-    **kwargs,
+    tool_timeout: Optional[float] = None,
 ) -> AsyncIterator["LifecycleEvent"]:
     """Run the stream loop and yield lifecycle events.
 
@@ -164,6 +164,10 @@ async def stream_until_user_input_events(
     sends a generic tool error message, and continues. "raise" yields the
     failure event and raises the original exception. "abort" yields the
     failure event, then a terminal run failure.
+
+    tool_timeout caps a single invoker in seconds. On expiry the invoker is
+    cancelled and the call fails with ToolCallTimeout, routed through
+    on_tool_error like any other invoker failure. None means no cap.
     """
     _validate_on_tool_error(on_tool_error)
 
@@ -183,6 +187,9 @@ async def stream_until_user_input_events(
     if resolved_tools:
         merged_stream_kwargs["tools"] = resolved_tools
 
+    streamer = _as_streamer(openai_client)
+    request_kwargs = {k: v for k, v in merged_stream_kwargs.items() if k not in ("messages", "model", "stream")}
+
     current_messages: List[ChatCompletionMessageParam] = list(messages)
     usages: List["CompletionUsage"] = []
 
@@ -191,18 +198,12 @@ async def stream_until_user_input_events(
 
         try:
             state = ChatCompletionStreamState()
-            stream = await openai_client.chat.completions.create(
+
+            async for chunk in streamer.stream(
                 messages=current_messages,
                 model=model,
-                stream=True,
-                **{
-                    k: v
-                    for k, v in merged_stream_kwargs.items()
-                    if k not in ("messages", "model", "stream")
-                },
-            )
-
-            async for chunk in stream:
+                **request_kwargs,
+            ):
                 for event in state.handle_chunk(chunk):
                     yield StreamEvent(event=event)
 
@@ -213,9 +214,7 @@ async def stream_until_user_input_events(
 
         iteration_usage: Optional[CompletionUsage] = None
         if final.usage:
-            iteration_usage = CompletionUsage.model_validate_json(
-                final.usage.model_dump_json()
-            )
+            iteration_usage = CompletionUsage.model_validate_json(final.usage.model_dump_json())
             usages.append(iteration_usage)
 
         assistant_msg = final.choices[0].message
@@ -238,21 +237,15 @@ async def stream_until_user_input_events(
                 # Defensive path for provider-returned names outside the schemas.
                 invoker = fallback_invoker(tool_call.function.name)
             if invoker is None:
-                yield RunFailed(
-                    exception=ValueError(
-                        f"No invoker for tool: {tool_call.function.name}"
-                    )
-                )
+                yield RunFailed(exception=ValueError(f"No invoker for tool: {tool_call.function.name}"))
                 return
 
             yield ToolCallStarted(iteration=index, tool_call=tool_call)
 
             try:
-                raw_output = await invoker(tool_call, context)
+                raw_output = await _invoke(invoker, tool_call, context, tool_timeout)
             except Exception as exc:
-                yield ToolCallFailed(
-                    iteration=index, tool_call=tool_call, exception=exc
-                )
+                yield ToolCallFailed(iteration=index, tool_call=tool_call, exception=exc)
                 if on_tool_error == "raise":
                     raise
                 if on_tool_error == "abort":
@@ -263,11 +256,7 @@ async def stream_until_user_input_events(
                     metadata={"error": repr(exc)},
                 )
             else:
-                result = (
-                    raw_output
-                    if isinstance(raw_output, ToolResult)
-                    else ToolResult(content=str(raw_output))
-                )
+                result = raw_output if isinstance(raw_output, ToolResult) else ToolResult(content=str(raw_output))
 
             current_messages.append(
                 ChatCompletionToolMessageParam(
@@ -279,16 +268,14 @@ async def stream_until_user_input_events(
             yield ToolCallCompleted(iteration=index, tool_call=tool_call, result=result)
 
     yield RunFailed(
-        exception=MaxIterationsReached(
-            f"Reached max_iterations={max_iterations} without waiting for user input."
-        )
+        exception=MaxIterationsReached(f"Reached max_iterations={max_iterations} without waiting for user input.")
     )
 
 
 async def stream_until_user_input(
     messages: Iterable[ChatCompletionMessageParam],
-    model: Union[str, ChatModel],
-    openai_client: AsyncOpenAI,
+    model: str,
+    openai_client: AsyncOpenAI | LiteLLMRouter | genai.Client | ChunkStreamer,
     *,
     stream_handler: Optional["ChatCompletionStreamHandler[ResponseFormatT]"] = None,
     tools: Optional[Sequence[Union["Tool", ChatCompletionToolParam]]] = None,
@@ -296,12 +283,10 @@ async def stream_until_user_input(
     stream_kwargs: Optional[Dict[Text, Any]] = None,
     context: Optional[Any] = None,
     max_iterations: int = 10,
-    tool_call_output_callback: Optional[
-        Callable[[ChatCompletionMessageFunctionToolCall, str], Awaitable[None]]
-    ] = None,
+    tool_call_output_callback: Optional[Callable[[ChatCompletionMessageFunctionToolCall, str], Awaitable[None]]] = None,
     fallback_invoker: Optional[Callable[[str], Optional[ToolInvokerFn]]] = None,
     on_tool_error: OnToolError = "emit",
-    **kwargs,
+    tool_timeout: Optional[float] = None,
 ) -> "StreamResult":
     """Run the stream loop through the callback-style API.
 
@@ -322,6 +307,7 @@ async def stream_until_user_input(
         max_iterations=max_iterations,
         fallback_invoker=fallback_invoker,
         on_tool_error=on_tool_error,
+        tool_timeout=tool_timeout,
     ):
         if isinstance(event, StreamEvent):
             await active_stream_handler.handle(event.event)
@@ -347,9 +333,7 @@ class Tool(Protocol):
 
     tool_param: ChatCompletionToolParam
 
-    async def invoke(
-        self, tool_call: ChatCompletionMessageToolCall, context: Any
-    ) -> Union[str, ToolResult]: ...
+    async def invoke(self, tool_call: ChatCompletionMessageToolCall, context: Any) -> Union[str, ToolResult]: ...
 
 
 @dataclass(frozen=True)
@@ -359,9 +343,7 @@ class FunctionTool(Tool):
     tool_param: ChatCompletionToolParam
     invoker: ToolInvokerFn
 
-    async def invoke(
-        self, tool_call: ChatCompletionMessageToolCall, context: Any
-    ) -> Union[str, ToolResult]:
+    async def invoke(self, tool_call: ChatCompletionMessageToolCall, context: Any) -> Union[str, ToolResult]:
         return await self.invoker(tool_call, context)
 
 
@@ -371,7 +353,7 @@ class StreamResult:
     def __init__(
         self,
         messages: List[ChatCompletionMessageParam],
-        model: Union[str, ChatModel],
+        model: str,
         usages: List["CompletionUsage"],
     ):
         self._messages = messages
@@ -380,7 +362,12 @@ class StreamResult:
         self.usages = usages
 
     def to_input_list(self) -> List[ChatCompletionMessageParam]:
-        return json.loads(json.dumps(self._messages, default=str))
+        """The history as plain JSON-safe data, ready to replay into the next run.
+
+        No `default=str` fallback: anything that cannot be serialised raises here rather
+        than being quietly stringified into something the provider will reject later.
+        """
+        return json.loads(json.dumps(self._messages))
 
 
 class ChatCompletionStreamHandler(Generic[ResponseFormatT]):
@@ -415,9 +402,7 @@ class ChatCompletionStreamHandler(Generic[ResponseFormatT]):
         else:
             logger.warning(f"Unknown event type: {event.type}")
 
-    async def on_event(
-        self, event: "ChatCompletionStreamEvent[ResponseFormatT]"
-    ) -> None:
+    async def on_event(self, event: "ChatCompletionStreamEvent[ResponseFormatT]") -> None:
         """Called for every stream event before more specific hooks."""
         pass
 
@@ -441,15 +426,11 @@ class ChatCompletionStreamHandler(Generic[ResponseFormatT]):
         """Called once when the full refusal string is complete."""
         pass
 
-    async def on_tool_calls_function_arguments_delta(
-        self, event: FunctionToolCallArgumentsDeltaEvent
-    ) -> None:
+    async def on_tool_calls_function_arguments_delta(self, event: FunctionToolCallArgumentsDeltaEvent) -> None:
         """Called for each incremental JSON fragment of a tool-call's arguments."""
         pass
 
-    async def on_tool_calls_function_arguments_done(
-        self, event: FunctionToolCallArgumentsDoneEvent
-    ) -> None:
+    async def on_tool_calls_function_arguments_done(self, event: FunctionToolCallArgumentsDoneEvent) -> None:
         """Called once when a tool call's full argument JSON is available."""
         pass
 
@@ -474,6 +455,42 @@ class MaxIterationsReached(Exception):
     """Raised when the tool loop reaches the iteration limit."""
 
 
+class ToolCallTimeout(TimeoutError):
+    """Raised when a tool invoker outruns ``tool_timeout``.
+
+    Subclasses :class:`TimeoutError` so ``except TimeoutError`` keeps working, and is
+    distinct so a cap that fired can be told apart from an invoker that timed out
+    against something of its own.
+    """
+
+
+async def _invoke(
+    invoker: ToolInvokerFn,
+    tool_call: ChatCompletionMessageToolCall,
+    context: Any,
+    timeout: Optional[float],
+) -> Union[str, ToolResult]:
+    """Await one invoker, under ``timeout`` seconds if one was given.
+
+    On expiry the invoker is cancelled. An invoker that swallows ``CancelledError``
+    still delays the cap — asyncio cannot take a coroutine's turn away from it.
+    """
+    if timeout is None:
+        return await invoker(tool_call, context)
+
+    deadline = asyncio.timeout(timeout)
+    try:
+        async with deadline:
+            return await invoker(tool_call, context)
+    except TimeoutError as exc:
+        if not deadline.expired():
+            # The invoker raised a TimeoutError of its own. Not our cap; not our error.
+            raise
+        raise ToolCallTimeout(
+            f"Tool {tool_call.function.name!r} exceeded tool_timeout={timeout}s and was cancelled."
+        ) from exc
+
+
 def _assistant_msg_to_param(assistant_msg: Any) -> ChatCompletionAssistantMessageParam:
     tool_calls_param: Dict[str, Any] = (
         {
@@ -485,11 +502,7 @@ def _assistant_msg_to_param(assistant_msg: Any) -> ChatCompletionAssistantMessag
                         "name": tc.function.name,
                         "arguments": tc.function.arguments or "{}",
                     },
-                    **(
-                        {"extra_content": tc.model_extra["extra_content"]}
-                        if "extra_content" in getattr(tc, "model_extra", {})
-                        else {}
-                    ),
+                    **_provider_extras(tc),
                 )
                 for tc in assistant_msg.tool_calls
             ]
@@ -501,7 +514,20 @@ def _assistant_msg_to_param(assistant_msg: Any) -> ChatCompletionAssistantMessag
         role="assistant",
         content=assistant_msg.content,
         **tool_calls_param,
+        **_provider_extras(assistant_msg),
     )
+
+
+def _provider_extras(source: Any) -> Dict[str, Any]:
+    """Carry provider state from a streamed object onto the param that replays it.
+
+    Providers hang state the OpenAI shape has no room for — Gemini 3 thought signatures,
+    for one — on `provider_specific_fields`. Dropping it here is silent until the next
+    turn, when the provider rejects the history. `extra_content` is the older spelling:
+    still read, never written.
+    """
+    model_extra: Dict[str, Any] = getattr(source, "model_extra", None) or {}
+    return {key: model_extra[key] for key in ("provider_specific_fields", "extra_content") if model_extra.get(key)}
 
 
 def _add_fallback_invokers(

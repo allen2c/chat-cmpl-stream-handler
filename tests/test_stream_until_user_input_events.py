@@ -21,6 +21,7 @@ from chat_cmpl_stream_handler import (
     args_from_tool_call,
     stream_until_user_input_events,
 )
+from tests.conftest import skip_if_out_of_credit
 
 GET_WEATHER_TOOL: ChatCompletionToolParam = {
     "type": "function",
@@ -52,9 +53,7 @@ FOO_TOOL: ChatCompletionToolParam = {
 }
 
 
-async def weather_result(
-    tool_call: ChatCompletionMessageToolCall, _context: Any
-) -> ToolResult:
+async def weather_result(tool_call: ChatCompletionMessageToolCall, _context: Any) -> ToolResult:
     args = args_from_tool_call(tool_call)
     return ToolResult(
         content=f"weather:{args['city']}",
@@ -66,15 +65,11 @@ async def failing_tool(_tool_call: ChatCompletionMessageToolCall, _context: Any)
     raise RuntimeError("tool exploded")
 
 
-async def fallback_tool(
-    _tool_call: ChatCompletionMessageToolCall, _context: Any
-) -> str:
+async def fallback_tool(_tool_call: ChatCompletionMessageToolCall, _context: Any) -> str:
     return "fallback ok"
 
 
-async def wrong_fallback_tool(
-    _tool_call: ChatCompletionMessageToolCall, _context: Any
-) -> str:
+async def wrong_fallback_tool(_tool_call: ChatCompletionMessageToolCall, _context: Any) -> str:
     return "wrong fallback"
 
 
@@ -88,21 +83,15 @@ async def test_events_no_tools(openai_client: AsyncOpenAI, openai_model: str):
     )
 
     assert isinstance(events[0], IterationStarted)
-    assert any(
-        isinstance(e, StreamEvent) and e.event.type == "content.delta" for e in events
-    )
-    assert any(
-        isinstance(e, StreamEvent) and e.event.type == "content.done" for e in events
-    )
+    assert any(isinstance(e, StreamEvent) and e.event.type == "content.delta" for e in events)
+    assert any(isinstance(e, StreamEvent) and e.event.type == "content.done" for e in events)
     assert any(isinstance(e, IterationCompleted) and e.usage for e in events)
     assert isinstance(events[-1], RunCompleted)
     assert not any(isinstance(e, ToolCallStarted) for e in events)
 
 
 @pytest.mark.asyncio
-async def test_events_tool_result_metadata(
-    openai_client: AsyncOpenAI, openai_model: str
-):
+async def test_events_tool_result_metadata(openai_client: AsyncOpenAI, openai_model: str):
     events = await _events(
         messages=[
             {
@@ -136,14 +125,17 @@ async def test_events_tool_error_modes(
     openai_model: str,
     mode: str,
 ):
-    stream_kwargs = {"tools": [GET_WEATHER_TOOL], "parallel_tool_calls": False}
+    stream_kwargs: dict[str, Any] = {
+        "tools": [GET_WEATHER_TOOL],
+        "parallel_tool_calls": False,
+    }
     if mode != "emit":
         stream_kwargs["tool_choice"] = {
             "type": "function",
             "function": {"name": "get_weather"},
         }
 
-    kwargs = dict(
+    kwargs: dict[str, Any] = dict(
         messages=[
             {
                 "role": "user",
@@ -171,9 +163,7 @@ async def test_events_tool_error_modes(
     events = await _events(**kwargs)
     assert isinstance(_one(events, ToolCallFailed).exception, RuntimeError)
     if mode == "emit":
-        assert (
-            _one(events, ToolCallCompleted).result.content == "Tool invocation failed."
-        )
+        assert _one(events, ToolCallCompleted).result.content == "Tool invocation failed."
         assert isinstance(events[-1], RunCompleted)
     else:
         assert isinstance(events[-1], RunFailed)
@@ -229,7 +219,9 @@ async def test_events_missing_invoker_stays_strict(
 
 
 async def _events(**kwargs: Any) -> list[Any]:
-    return [event async for event in stream_until_user_input_events(**kwargs)]
+    events = [event async for event in stream_until_user_input_events(**kwargs)]
+    skip_if_out_of_credit(events)
+    return events
 
 
 def _one(events: list[Any], event_type: type) -> Any:

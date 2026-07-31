@@ -48,7 +48,7 @@ class IterationStarted:
 class StreamEvent:
     """A raw stream event was received."""
 
-    event: "ChatCompletionStreamEvent"
+    event: "ChatCompletionStreamEvent[Any]"
 
 
 @dataclass(frozen=True)

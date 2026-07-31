@@ -2,7 +2,6 @@ import json
 from typing import Any, Literal
 
 import pytest
-from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from chat_cmpl_stream_handler import (
@@ -14,7 +13,7 @@ from chat_cmpl_stream_handler.utils.pydantic_to_tool import (
     PydanticToolConfig,
     build_pydantic_tools_and_invokers,
 )
-from tests.conftest import LLMProvider
+from tests.conftest import LLMProvider, as_dicts
 
 
 class BeginPipelineInput(BaseModel):
@@ -39,9 +38,7 @@ def tool_output_of_next_step(tool_name: str, arguments: dict[str, str]) -> str:
             "status": "ok",
             "next_tool": tool_name,
             "next_arguments": arguments,
-            "instruction": (
-                f"Call `{tool_name}` next with the exact `next_arguments` object."
-            ),
+            "instruction": (f"Call `{tool_name}` next with the exact `next_arguments` object."),
         }
     )
 
@@ -70,19 +67,14 @@ async def use_step_3_invoker(arguments: UseStep3Input, context: Any) -> str:
     return "PIPELINE_DONE"
 
 
-def extract_tool_call_names(
-    input_list: list[ChatCompletionMessageParam], model: str | None = None
-) -> list[str]:
+def extract_tool_call_names(input_list: list[dict[str, Any]], model: str | None = None) -> list[str]:
     names: list[str] = []
     for message in input_list:
         if "tool_calls" in message:
             content = message["content"]
             tool_calls = message["tool_calls"]
             if tool_calls and content:
-                print(
-                    f"The tool call from model '{model or 'not given'}' "
-                    + f"has message content: {content}"
-                )
+                print(f"The tool call from model '{model or 'not given'}' " + f"has message content: {content}")
 
             for tool_call in tool_calls or []:
                 names.append(tool_call["function"]["name"])
@@ -107,28 +99,19 @@ async def test_stream_until_user_input_with_dependent_tools_pipeline(
             PydanticToolConfig(
                 model=UseStep1Input,
                 name="use_step_1",
-                description=(
-                    "Advance the pipeline using the step-1 ticket from the previous "
-                    "tool result."
-                ),
+                description=("Advance the pipeline using the step-1 ticket from the previous " "tool result."),
                 invoker=use_step_1_invoker,
             ),
             PydanticToolConfig(
                 model=UseStep2Input,
                 name="use_step_2",
-                description=(
-                    "Advance the pipeline using the step-2 ticket from the previous "
-                    "tool result."
-                ),
+                description=("Advance the pipeline using the step-2 ticket from the previous " "tool result."),
                 invoker=use_step_2_invoker,
             ),
             PydanticToolConfig(
                 model=UseStep3Input,
                 name="use_step_3",
-                description=(
-                    "Finish the pipeline using the step-3 ticket from the previous "
-                    "tool result."
-                ),
+                description=("Finish the pipeline using the step-3 ticket from the previous " "tool result."),
                 invoker=use_step_3_invoker,
             ),
         ]
@@ -150,10 +133,7 @@ async def test_stream_until_user_input_with_dependent_tools_pipeline(
             },
             {
                 "role": "user",
-                "content": (
-                    "Begin by calling `begin_pipeline` with "
-                    '{"phase":"go"} and complete every step.'
-                ),
+                "content": ("Begin by calling `begin_pipeline` with " '{"phase":"go"} and complete every step.'),
             },
         ],
         model=model,
@@ -170,7 +150,7 @@ async def test_stream_until_user_input_with_dependent_tools_pipeline(
 
     assert isinstance(result, StreamResult)
 
-    input_list = result.to_input_list()
+    input_list = as_dicts(result.to_input_list())
     tool_call_names = extract_tool_call_names(input_list, model)
 
     assert tool_call_names == [
