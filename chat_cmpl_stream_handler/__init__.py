@@ -29,6 +29,8 @@ from typing import (
     runtime_checkable,
 )
 
+from google import genai
+from litellm.router import Router as LiteLLMRouter
 from openai import AsyncOpenAI
 from openai.lib._parsing._completions import ResponseFormatT
 from openai.lib.streaming.chat import ChatCompletionStreamState
@@ -62,9 +64,7 @@ from openai.types.chat.chat_completion_tool_message_param import (
     ChatCompletionToolMessageParam,
 )
 from openai.types.completion_usage import CompletionUsage
-from openai.types.shared.chat_model import ChatModel
-from litellm.router import Router as LiteLLMRouter
-from google import genai
+
 from chat_cmpl_stream_handler.events import (  # noqa: F401
     IterationCompleted,
     IterationStarted,
@@ -76,6 +76,10 @@ from chat_cmpl_stream_handler.events import (  # noqa: F401
     ToolCallFailed,
     ToolCallStarted,
     ToolResult,
+)
+from chat_cmpl_stream_handler.streamers import (
+    ChunkStreamer as ChunkStreamer,
+    as_streamer as _as_streamer,
 )
 from chat_cmpl_stream_handler.utils.tool_call import (  # noqa: F401
     ToolInvokerFn as ToolInvokerFn,
@@ -137,8 +141,8 @@ def merge_tools_and_invokers(
 
 async def stream_until_user_input_events(
     messages: Iterable[ChatCompletionMessageParam],
-    model: Union[str, ChatModel],
-    openai_client: AsyncOpenAI | LiteLLMRouter | genai.Client,
+    model: str,
+    openai_client: AsyncOpenAI | LiteLLMRouter | genai.Client | ChunkStreamer,
     *,
     tools: Optional[Sequence[Union["Tool", ChatCompletionToolParam]]] = None,
     tool_invokers: Optional[Dict[str, ToolInvokerFn]] = None,
@@ -178,6 +182,9 @@ async def stream_until_user_input_events(
     if resolved_tools:
         merged_stream_kwargs["tools"] = resolved_tools
 
+    streamer = _as_streamer(openai_client)
+    request_kwargs = {k: v for k, v in merged_stream_kwargs.items() if k not in ("messages", "model", "stream")}
+
     current_messages: List[ChatCompletionMessageParam] = list(messages)
     usages: List["CompletionUsage"] = []
 
@@ -186,14 +193,12 @@ async def stream_until_user_input_events(
 
         try:
             state = ChatCompletionStreamState()
-            stream = await openai_client.chat.completions.create(
+
+            async for chunk in streamer.stream(
                 messages=current_messages,
                 model=model,
-                stream=True,
-                **{k: v for k, v in merged_stream_kwargs.items() if k not in ("messages", "model", "stream")},
-            )
-
-            async for chunk in stream:
+                **request_kwargs,
+            ):
                 for event in state.handle_chunk(chunk):
                     yield StreamEvent(event=event)
 
@@ -264,8 +269,8 @@ async def stream_until_user_input_events(
 
 async def stream_until_user_input(
     messages: Iterable[ChatCompletionMessageParam],
-    model: Union[str, ChatModel],
-    openai_client: AsyncOpenAI | LiteLLMRouter | genai.Client,
+    model: str,
+    openai_client: AsyncOpenAI | LiteLLMRouter | genai.Client | ChunkStreamer,
     *,
     stream_handler: Optional["ChatCompletionStreamHandler[ResponseFormatT]"] = None,
     tools: Optional[Sequence[Union["Tool", ChatCompletionToolParam]]] = None,
@@ -342,7 +347,7 @@ class StreamResult:
     def __init__(
         self,
         messages: List[ChatCompletionMessageParam],
-        model: Union[str, ChatModel],
+        model: str,
         usages: List["CompletionUsage"],
     ):
         self._messages = messages
@@ -351,7 +356,12 @@ class StreamResult:
         self.usages = usages
 
     def to_input_list(self) -> List[ChatCompletionMessageParam]:
-        return json.loads(json.dumps(self._messages, default=str))
+        """The history as plain JSON-safe data, ready to replay into the next run.
+
+        No `default=str` fallback: anything that cannot be serialised raises here rather
+        than being quietly stringified into something the provider will reject later.
+        """
+        return json.loads(json.dumps(self._messages))
 
 
 class ChatCompletionStreamHandler(Generic[ResponseFormatT]):
@@ -450,11 +460,7 @@ def _assistant_msg_to_param(assistant_msg: Any) -> ChatCompletionAssistantMessag
                         "name": tc.function.name,
                         "arguments": tc.function.arguments or "{}",
                     },
-                    **(
-                        {"extra_content": tc.model_extra["extra_content"]}
-                        if "extra_content" in getattr(tc, "model_extra", {})
-                        else {}
-                    ),
+                    **_provider_extras(tc),
                 )
                 for tc in assistant_msg.tool_calls
             ]
@@ -466,7 +472,20 @@ def _assistant_msg_to_param(assistant_msg: Any) -> ChatCompletionAssistantMessag
         role="assistant",
         content=assistant_msg.content,
         **tool_calls_param,
+        **_provider_extras(assistant_msg),
     )
+
+
+def _provider_extras(source: Any) -> Dict[str, Any]:
+    """Carry provider state from a streamed object onto the param that replays it.
+
+    Providers hang state the OpenAI shape has no room for — Gemini 3 thought signatures,
+    for one — on `provider_specific_fields`. Dropping it here is silent until the next
+    turn, when the provider rejects the history. `extra_content` is the older spelling:
+    still read, never written.
+    """
+    model_extra: Dict[str, Any] = getattr(source, "model_extra", None) or {}
+    return {key: model_extra[key] for key in ("provider_specific_fields", "extra_content") if model_extra.get(key)}
 
 
 def _add_fallback_invokers(
