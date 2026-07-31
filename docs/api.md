@@ -27,6 +27,7 @@ async def stream_until_user_input(
     tool_call_output_callback: Callable[[ChatCompletionMessageFunctionToolCall, str], Awaitable[None]] | None = None,
     fallback_invoker: Callable[[str], ToolInvokerFn | None] | None = None,
     on_tool_error: Literal["emit", "raise", "abort"] = "emit",
+    tool_timeout: float | None = None,
 ) -> StreamResult
 ```
 
@@ -46,6 +47,7 @@ Streams a completion, executes tool calls, feeds results back, repeats — until
 | `tool_call_output_callback` | Receives each completed tool output as a plain string                                                             |
 | `fallback_invoker`          | Resolves a tool invoker by name when the normal invoker map misses                                                |
 | `on_tool_error`             | `"emit"` continues with a generic tool error, `"raise"` re-raises, `"abort"` stops and raises through the adapter |
+| `tool_timeout`              | Seconds one invoker may take. On expiry it is cancelled and the call fails with `ToolCallTimeout`. Default: no cap |
 
 ## `stream_until_user_input_events`
 
@@ -62,6 +64,7 @@ async def stream_until_user_input_events(
     max_iterations: int = 10,
     fallback_invoker: Callable[[str], ToolInvokerFn | None] | None = None,
     on_tool_error: Literal["emit", "raise", "abort"] = "emit",
+    tool_timeout: float | None = None,
 ) -> AsyncIterator[LifecycleEvent]
 ```
 
@@ -193,4 +196,15 @@ All methods are no-ops by default. Override only what you need.
 | Exception              | Raised when                                                                |
 |------------------------|----------------------------------------------------------------------------|
 | `MaxIterationsReached` | The loop hit `max_iterations` without the model settling on a final answer |
+| `ToolCallTimeout`      | An invoker outran `tool_timeout` and was cancelled                         |
 | `ValueError`           | A tool schema was passed with no invoker to match it                       |
+| `TypeError`            | An entry point was called with a keyword it does not accept                |
+
+`ToolCallTimeout` subclasses `TimeoutError`, so `except TimeoutError` keeps working. It is
+a distinct type so a cap that fired can be told apart from an invoker that timed out
+against something of its own — the loop never relabels the latter as the former.
+
+A timeout is an invoker failure like any other, so `on_tool_error` decides what happens
+next: `"emit"` tells the model the tool failed and carries on, `"raise"` propagates,
+`"abort"` ends the run. Note the cap cancels the invoker; one that swallows
+`CancelledError` still delays it.

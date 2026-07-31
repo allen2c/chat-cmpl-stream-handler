@@ -5,6 +5,7 @@ handler-based flow. Tools can be passed as raw schemas with invokers or as
 small objects that carry both together.
 """
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -151,6 +152,7 @@ async def stream_until_user_input_events(
     max_iterations: int = 10,
     fallback_invoker: Optional[Callable[[str], Optional[ToolInvokerFn]]] = None,
     on_tool_error: OnToolError = "emit",
+    tool_timeout: Optional[float] = None,
 ) -> AsyncIterator["LifecycleEvent"]:
     """Run the stream loop and yield lifecycle events.
 
@@ -162,6 +164,10 @@ async def stream_until_user_input_events(
     sends a generic tool error message, and continues. "raise" yields the
     failure event and raises the original exception. "abort" yields the
     failure event, then a terminal run failure.
+
+    tool_timeout caps a single invoker in seconds. On expiry the invoker is
+    cancelled and the call fails with ToolCallTimeout, routed through
+    on_tool_error like any other invoker failure. None means no cap.
     """
     _validate_on_tool_error(on_tool_error)
 
@@ -237,7 +243,7 @@ async def stream_until_user_input_events(
             yield ToolCallStarted(iteration=index, tool_call=tool_call)
 
             try:
-                raw_output = await invoker(tool_call, context)
+                raw_output = await _invoke(invoker, tool_call, context, tool_timeout)
             except Exception as exc:
                 yield ToolCallFailed(iteration=index, tool_call=tool_call, exception=exc)
                 if on_tool_error == "raise":
@@ -280,6 +286,7 @@ async def stream_until_user_input(
     tool_call_output_callback: Optional[Callable[[ChatCompletionMessageFunctionToolCall, str], Awaitable[None]]] = None,
     fallback_invoker: Optional[Callable[[str], Optional[ToolInvokerFn]]] = None,
     on_tool_error: OnToolError = "emit",
+    tool_timeout: Optional[float] = None,
 ) -> "StreamResult":
     """Run the stream loop through the callback-style API.
 
@@ -300,6 +307,7 @@ async def stream_until_user_input(
         max_iterations=max_iterations,
         fallback_invoker=fallback_invoker,
         on_tool_error=on_tool_error,
+        tool_timeout=tool_timeout,
     ):
         if isinstance(event, StreamEvent):
             await active_stream_handler.handle(event.event)
@@ -445,6 +453,42 @@ class ChatCompletionStreamHandler(Generic[ResponseFormatT]):
 
 class MaxIterationsReached(Exception):
     """Raised when the tool loop reaches the iteration limit."""
+
+
+class ToolCallTimeout(TimeoutError):
+    """Raised when a tool invoker outruns ``tool_timeout``.
+
+    Subclasses :class:`TimeoutError` so ``except TimeoutError`` keeps working, and is
+    distinct so a cap that fired can be told apart from an invoker that timed out
+    against something of its own.
+    """
+
+
+async def _invoke(
+    invoker: ToolInvokerFn,
+    tool_call: ChatCompletionMessageToolCall,
+    context: Any,
+    timeout: Optional[float],
+) -> Union[str, ToolResult]:
+    """Await one invoker, under ``timeout`` seconds if one was given.
+
+    On expiry the invoker is cancelled. An invoker that swallows ``CancelledError``
+    still delays the cap — asyncio cannot take a coroutine's turn away from it.
+    """
+    if timeout is None:
+        return await invoker(tool_call, context)
+
+    deadline = asyncio.timeout(timeout)
+    try:
+        async with deadline:
+            return await invoker(tool_call, context)
+    except TimeoutError as exc:
+        if not deadline.expired():
+            # The invoker raised a TimeoutError of its own. Not our cap; not our error.
+            raise
+        raise ToolCallTimeout(
+            f"Tool {tool_call.function.name!r} exceeded tool_timeout={timeout}s and was cancelled."
+        ) from exc
 
 
 def _assistant_msg_to_param(assistant_msg: Any) -> ChatCompletionAssistantMessageParam:

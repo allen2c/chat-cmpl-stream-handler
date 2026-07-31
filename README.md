@@ -229,6 +229,7 @@ async def stream_until_user_input(
     tool_call_output_callback: Callable[[ChatCompletionMessageFunctionToolCall, str], Awaitable[None]] | None = None,
     fallback_invoker: Callable[[str], ToolInvokerFn | None] | None = None,
     on_tool_error: Literal["emit", "raise", "abort"] = "emit",
+    tool_timeout: float | None = None,
 ) -> StreamResult
 ```
 
@@ -248,6 +249,7 @@ Streams a completion, executes tool calls, feeds results back, repeats — until
 | `tool_call_output_callback` | Receives each completed tool output as a plain string                                                                 |
 | `fallback_invoker`          | Resolves a tool invoker by name when the normal invoker map misses                                                    |
 | `on_tool_error`             | `"emit"` continues with a generic tool error, `"raise"` re-raises, `"abort"` stops and raises through the adapter     |
+| `tool_timeout`              | Seconds one invoker may take. On expiry it is cancelled and the call fails with `ToolCallTimeout`. Default: no cap |
 
 ### `stream_until_user_input_events`
 
@@ -264,6 +266,7 @@ async def stream_until_user_input_events(
     max_iterations: int = 10,
     fallback_invoker: Callable[[str], ToolInvokerFn | None] | None = None,
     on_tool_error: Literal["emit", "raise", "abort"] = "emit",
+    tool_timeout: float | None = None,
 ) -> AsyncIterator[LifecycleEvent]
 ```
 
