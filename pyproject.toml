@@ -6,7 +6,7 @@ license = { text = "MIT" }
 name = "chat-cmpl-stream-handler"
 readme = "README.md"
 requires-python = ">=3.11,<4"
-version = "0.5.0"
+version = "0.6.0"
 
 [project.urls]
 Homepage = "https://github.com/allen2c/chat-cmpl-stream-handler"
@@ -32,15 +32,30 @@ pytest-env = "*"
 pytest-xdist = "*"
 rich = "*"
 rich-color-support = "*"
+ruff = "*"
 setuptools = "*"
 twine = "*"
 
+[tool.black]
+line-length = 120
+target-version = ["py311"]
+
 [tool.isort]
+combine_as_imports = true
+line_length = 120
 profile = "black"
 
-[tool.flake8]
-ignore = ["E203", "E704", "W503"]
-max-line-length = 88
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+ignore = ["E203"]
+select = ["B", "E", "F", "W"]
+
+[tool.pyright]
+include = ["chat_cmpl_stream_handler", "tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
 
 [tool.pytest.ini_options]
 env = ["ENVIRONMENT=test", "PYTEST_IS_RUNNING=true"]
